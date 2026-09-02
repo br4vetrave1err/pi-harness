@@ -1,0 +1,6 @@
+workspace/
+.pi/
+*.pyc
+__pycache__/
+.env
+!.env.example

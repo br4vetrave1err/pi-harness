@@ -1,0 +1,83 @@
+services:
+  pi_agent:
+    build: .
+    container_name: pi-personal-agent
+    restart: unless-stopped
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      # Watchtower + git-sync will auto-update this container
+    environment:
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      # --- Detailed logging (visible via `docker logs` / `docker compose logs -f`) ---
+      - FREEFLOW_LOG_LEVEL=debug
+      - FREEFLOW_DEBUG=1
+      - PYTHONUNBUFFERED=1
+      - PYTHONIOENCODING=utf-8
+      # Optional toggles:
+      # - TAIL_SESSIONS=1  # also tail pi session jsonl to stdout
+      # - ENABLE_TASK_WATCHER=1  # auto-start task_watcher.sh
+      # - HEARTBEAT=1  # periodic alive heartbeat in logs
+      # - ENABLE_GIT_SYNC=1  # in-container git pull watcher (alternative to host cron)
+      # - GIT_SYNC_INTERVAL=15
+      # - RESTART_ON_CODE_CHANGE=0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+        labels: "service=pi_agent"
+    # pi-freeflow uses keyless auth (Bearer kilo-free) for Kilo gateway and anonymous for OpenCode.
+    # Do NOT set PI_LLM_* – pi reads provider/model from /root/.pi/config.json (mounted as .pi/config.json)
+    # Example config.json: { "llm": { "provider": "freeflow", "model": "freeflow/dots-studio/dots-3-note-preview:free" } }
+    stdin_open: true
+    tty: true
+    volumes:
+      # Harness itself visible to pi for self-update (pi cwd = /workspace = harness root)
+      - E:/projects/pi-harness:/workspace
+      # Keep .pi mounted separately so sessions survive rebuilds (also visible as /workspace/.pi)
+      - E:/projects/pi-harness/.pi:/root/.pi
+      # Optional isolated task dir – host E:/projects/pi-harness/workspace appears as /workspace/workspace inside container
+      # If you prefer empty /workspace, revert to: E:/projects/pi-harness/workspace:/workspace
+
+  # --- AUTO-UPDATE: Watchtower watches GHCR and restarts when CI pushes new image ---
+  watchtower:
+    image: containrrr/watchtower
+    container_name: pi-watchtower
+    restart: unless-stopped
+    command: --interval 30 --cleanup --label-enable --rolling-restart
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=30
+      - WATCHTOWER_NOTIFICATIONS=shoutrrr
+      - WATCHTOWER_NOTIFICATION_URL=${WATCHTOWER_SLACK_URL:-}
+    profiles: ["watchtower", "auto-update"]  # run with: docker compose --profile auto-update up -d
+
+  # --- LIGHTWEIGHT ALTERNATIVE: pure git-sync (no registry, just git pull) ---
+  git-sync:
+    image: alpine/git:latest
+    container_name: pi-git-sync
+    restart: unless-stopped
+    working_dir: /repo
+    volumes:
+      - E:/projects/pi-harness:/repo
+      - /var/run/docker.sock:/var/run/docker.sock # to trigger docker compose restart
+    command: >
+      sh -c "apk add --no-cache docker-cli docker-compose bash &&
+             echo '[git-sync] watching /repo every 15s' &&
+             while true; do
+               cd /repo && git fetch --quiet &&
+               if [ $$(git rev-parse HEAD) != $$(git rev-parse @{u} 2>/dev/null || echo HEAD) ]; then
+                 echo '[git-sync] change detected, pulling...' &&
+                 git pull --ff-only &&
+                 if echo $$(git diff --name-only HEAD@{1} HEAD 2>/dev/null) | grep -qiE 'Dockerfile|docker-compose|docker-entrypoint'; then
+                   echo '[git-sync] infra changed, rebuilding...' && docker compose -f /repo/docker-compose.yml up -d --build;
+                 else
+                   echo '[git-sync] code synced via volume' ;
+                 fi;
+               fi;
+               sleep 15;
+             done"
+    profiles: ["git-sync"]  # run with: docker compose --profile git-sync up -d
