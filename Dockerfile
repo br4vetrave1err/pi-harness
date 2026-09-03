@@ -119,6 +119,7 @@ if [[ $- == *i* ]] && [ -t 0 ] && [ -z "$PI_NO_AUTO" ] && [ -z "$PI_MANUAL_BASH"
   fi
 fi
 BASHRC
+RUN sed -i 's/\r$//' /root/.bashrc 2>/dev/null || true
 
 # --- Detailed logging defaults (visible in `docker logs`) ---
 ENV PYTHONUNBUFFERED=1
