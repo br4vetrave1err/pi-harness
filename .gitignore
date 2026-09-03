@@ -4,3 +4,6 @@ workspace/
 __pycache__/
 .env
 !.env.example
+# allow coder sub-agent to be versioned
+!.pi/agents/
+!.pi/agents/coder.md

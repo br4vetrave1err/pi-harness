@@ -23,19 +23,14 @@ RUN pi install npm:pi-freeflow && \
     ln -sf /opt/pi-freeflow /usr/lib/node_modules/pi-freeflow && \
     pi --list-models | head -n 20
 
-# Additional pi extensions: web access, subagents, feynman (research agent)
+# Additional pi extensions: web access, subagents + standalone feynman CLI
 RUN pi install npm:pi-web-access && \
     pi install npm:pi-subagents && \
-    rm -rf /root/.pi/agent/npm/node_modules/.jszip-* /root/.pi/agent/npm/node_modules/.d3-* /root/.pi/agent/npm/node_modules/.feynman-* && \
-    pi install npm:@companion-ai/feynman || ( \
-      echo "feynman pi install race hit, falling back to npm" && \
-      rm -rf /root/.pi/agent/npm/node_modules/.jszip-* /root/.pi/agent/npm/node_modules/.d3-* && \
-      npm --prefix /root/.pi/agent/npm install @companion-ai/feynman --force && \
-      python3 -c "import json,pathlib;p=pathlib.Path('/root/.pi/agent/settings.json');j=json.loads(p.read_text());k='npm:@companion-ai/feynman';
-import json as _j
-if k not in j['packages']: j['packages'].append(k); p.write_text(_j.dumps(j, indent=2)); print(f'added {k}')" \
-    ) && \
-    pi list && ls -la /root/.pi/agent/npm/node_modules/@companion-ai/feynman/dist/ | head -n 20
+    pi list && \
+    mkdir -p /opt/feynman && npm install --prefix /opt/feynman --ignore-scripts @companion-ai/feynman && \
+    ln -sf /opt/feynman/node_modules/@companion-ai/feynman/bin/feynman.js /usr/local/bin/feynman && \
+    feynman --version && \
+    mkdir -p /root/.pi/agent/agents && echo "installed feynman standalone $(feynman --version)"
 
 # Patch pi-freeflow proxy to clamp max_completion_tokens for AtlasCloud (dots) – empirical limit ~390k, advertised 512k causes 400 bad request
 # See debugging in workspace/*.py – pi sends max_completion_tokens 506566 which fails at >390k
@@ -91,6 +86,10 @@ if old2 in t2:
 PY
 
 RUN mkdir -p /tools /workspace /.pi
+
+# Bake coder sub-agent (all 4 extensions) into image
+COPY .pi/agents/coder.md /root/.pi/agent/agents/coder.md
+COPY .pi/agents/coder.md /workspace/.pi/agents/coder.md
 
 COPY slack_webhook.sh /tools/slack_webhook.sh
 COPY task_watcher.sh /tools/task_watcher.sh
