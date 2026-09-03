@@ -7,3 +7,7 @@ __pycache__/
 # allow coder sub-agent to be versioned
 !.pi/agents/
 !.pi/agents/coder.md
+!.pi/prompts/
+!.pi/prompts/coder-tester-loop.md
+!workflows/
+!workflows/coder-tester-loop.js

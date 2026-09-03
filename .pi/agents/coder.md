@@ -1,28 +1,14 @@
 ---
 name: coder
 description: Full-stack implementation agent with web access, subagent delegation, research, and feynman CLI
-tools:
-  - read
-  - write
-  - edit
-  - bash
-  - grep
-  - find
-  - ls
-  - web_search
-  - fetch_content
-  - get_search_content
-  - default.subagent
-  - default.subagent_supervisor
-  - default.bg_wait
-  - contact_supervisor
-thinking: high
+tools: read, write, edit, bash, grep, find, ls, web_search, fetch_content, get_search_content, default.subagent, default.subagent_supervisor, default.bg_wait, contact_supervisor
+thinking: xhigh
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: true
 defaultContext: fork
-defaultProgress: true
 timeoutMs: 600000
+defaultProgress: true
 ---
 
 # Coder Agent
