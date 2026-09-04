@@ -1,3 +1,7 @@
+// UPDATE 2026-09-04: pi-subagents docs https://github.com/nicobailon/pi-subagents/tree/main/docs
+// - observability.md#async-run-artifacts, #status-and-result-fields, #process-terminal-proof, #fleetview
+// - extension-api.md#fleet-status-DTO, #host-inspection-protocol (bounded 64KB/200, session-scoped)
+// - Adds processTerminal proof, correct window/spent tokens, comments per update
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -95,7 +99,7 @@ function readFleetStatus() {
         // Map fleet state to dashboard status
         const dashboardStatus = state === 'running' || state === 'pending' ? 'running' : state === 'paused' ? 'waiting' : state === 'complete' ? 'done' : state === 'failed' ? 'error' : state === 'stopped' ? 'error' : state;
 
-        // Extended fields: expose full status.json per observability spec
+        // Extended fields: expose full status.json per observability spec + process-terminal proof (observability.md#process-terminal-proof)
         const totalCost = j.totalCost || 0;
         const lifecycleArtifactVersion = j.lifecycleArtifactVersion || null;
         const mode = j.mode || null;
@@ -107,12 +111,38 @@ function readFleetStatus() {
         const runtimeAcknowledgedExtensions = j.runtimeAcknowledgedExtensions || [];
         const modelAttempts = j.modelAttempts || null;
         const children = j.children || [];
-        // window/spent distinction: totalTokens object window vs total
+        // process-terminal proof: lifecycle v3 adds process-terminal.json (observed only after parent observes runner close + lease free), else unknown
+        let processTerminal = null;
+        try {
+          const ptFile = path.join(dir, 'process-terminal.json');
+          const ptCandidate = path.join(dir, 'process-terminal-candidate.json');
+          if (fs.existsSync(ptFile)) {
+            const pt = JSON.parse(fs.readFileSync(ptFile, 'utf-8'));
+            // observed | unknown — do not infer from endedAt/result existence per docs
+            processTerminal = pt.observed ? 'observed' : pt.status || (pt.proof === 'observed' ? 'observed' : 'unknown');
+            if (processTerminal !== 'observed') processTerminal = 'unknown';
+          } else if (fs.existsSync(ptCandidate)) {
+            // candidate is private runner evidence, not public proof — treat as unknown until observed
+            processTerminal = 'unknown';
+          } else {
+            processTerminal = null; // older runs without proof remain readable, no inference
+          }
+        } catch { processTerminal = 'unknown'; }
+        // window/spent distinction: totalTokens object window vs total (observability.md#fleetview — window = latest assistant input + cache-read, spent = cumulative input+output)
         let windowTokens = totalTokens;
         let spentTokens = totalTokens;
         if (typeof j.totalTokens === 'object' && j.totalTokens !== null) {
-          windowTokens = j.totalTokens.window || j.totalTokens.input || totalTokens;
-          spentTokens = j.totalTokens.total || j.totalTokens.output || totalTokens;
+          windowTokens = j.totalTokens.window ?? j.totalTokens.input ?? j.totalTokens.total ?? totalTokens;
+          const total = j.totalTokens.total;
+          if (total != null) {
+            spentTokens = total;
+          } else {
+            const sum = (j.totalTokens.input ?? 0) + (j.totalTokens.output ?? 0);
+            spentTokens = sum || totalTokens;
+          }
+          // fallback when object has window/total naming
+          if (!windowTokens) windowTokens = totalTokens;
+          if (!spentTokens) spentTokens = totalTokens;
         }
         fleet.push({
           runId,
@@ -149,6 +179,7 @@ function readFleetStatus() {
           children,
           cwd: j.cwd || null,
           asyncDir: dir,
+          processTerminal,
         });
       } catch (e) { /* skip malformed */ }
     }

@@ -1,4 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+// UPDATE 2026-09-04: pi-subagents docs https://github.com/nicobailon/pi-subagents/tree/main/docs
+// - observability.md#status-and-result-fields + extension-api.md#fleet-status-DTO
+// - Fixes: modal flicker (sessionFetches 4→1), stale ref loop, TS2339, window/spent, processTerminal
+import { useState, useEffect, useRef, useMemo, memo } from "react"; // UPDATE: added useMemo,memo for stable derivations per observability.md (prevent re-render every 500ms SSE)
 
 const AGENTS = [
   { id: "researcher", color: "#39ff6e", label: "RESEARCHER" },
@@ -17,15 +20,43 @@ const FALLBACK_CONVERSATIONS = [
   { id: 5, title: "debug websocket disconnect", time: "13:30", tags: ["researcher", "coder", "reviewer"], status: "done", messages: 89, file: null as string | null },
 ];
 
+// UPDATE: AgentWindow extended per observability.md#status-and-result-fields (lifecycleArtifactVersion, runId, sessionId, mode, state, durationMs, totalCost, windowTokens/spentTokens, workflowGraph, children, launchResolvedExtensions, runtimeAcknowledgedExtensions, processTerminal) + extension-api.md fleet DTO — fixes TS2339 (15 errors) and enables window/spent + observed badge
 type AgentWindow = {
   id: string;
+  runId?: string; // UPDATE: status.json runId
+  fullId?: string; // UPDATE: fullId fallback
   agent: string;
   task: string;
   status: "running" | "waiting" | "done" | "error";
+  fleetState?: string; // UPDATE: raw state from status.json (observability.md)
   model: string;
   tokens: number;
+  windowTokens?: number; // UPDATE: observability.md#fleetview — latest input+cache-read
+  spentTokens?: number; // UPDATE: observability.md#fleetview — cumulative input+output
+  totalCost?: number; // UPDATE: status.json totalCost
   elapsed: number;
+  durationMs?: number; // UPDATE: status.json durationMs
   lines: LogLine[];
+  file?: string | null; // UPDATE: sessionFile
+  sessionFile?: string | null; // UPDATE: status.json sessionFile
+  sessionId?: string | null; // UPDATE: status.json sessionId
+  toolCount?: number; // UPDATE: toolCount
+  turnCount?: number; // UPDATE: turnCount
+  lifecycleArtifactVersion?: number | null; // UPDATE: lifecycleArtifactVersion
+  mode?: string | null; // UPDATE: mode foreground/background
+  endedAt?: number | null; // UPDATE: endedAt
+  workflowGraph?: any | null; // UPDATE: workflowGraph for chain flow
+  steps?: any[]; // UPDATE: steps
+  results?: any[]; // UPDATE: results
+  launchResolvedExtensions?: string[]; // UPDATE: launchResolvedExtensions (parent intent)
+  runtimeAcknowledgedExtensions?: any; // UPDATE: runtimeAcknowledgedExtensions (child ack)
+  modelAttempts?: any | null; // UPDATE: modelAttempts
+  children?: any[]; // UPDATE: nested children
+  cwd?: string | null; // UPDATE: cwd
+  asyncDir?: string | null; // UPDATE: asyncDir
+  processTerminal?: "observed" | "unknown" | null; // UPDATE: process-terminal.json proof (observability.md#process-terminal-proof)
+  startedAt?: number; // UPDATE: startedAt
+  lastUpdate?: number; // UPDATE: lastUpdate
 };
 
 type LogLine = {
@@ -94,7 +125,8 @@ function StatusDot({ status }: { status: AgentWindow["status"] }) {
   );
 }
 
-function LogLineView({ line }: { line: LogLine }) {
+// UPDATE: memo per observability.md#fleet-inspector — prevents re-render of 8 lines every 500ms SSE (stable LogLineView, keyed by runId-ts)
+const LogLineView = memo(function LogLineView({ line }: { line: LogLine }) {
   const styles: Record<string, string> = {
     cmd: "#c8e6c8",
     out: "#6b9b6b",
@@ -119,7 +151,7 @@ function LogLineView({ line }: { line: LogLine }) {
       </span>
     </div>
   );
-}
+});
 
 function AgentWindowCard({ win, isActive, onClick }: { win: AgentWindow; isActive: boolean; onClick: () => void }) {
   const endRef = useRef<HTMLDivElement>(null);
@@ -150,8 +182,9 @@ function AgentWindowCard({ win, isActive, onClick }: { win: AgentWindow; isActiv
         </div>
         <div className="flex items-center gap-3 shrink-0 ml-2">
           <span className="text-[9px] text-[#3d5c3d] tracking-wide hidden sm:block">{win.model}</span>
-          <span className="text-[9px] text-[#3d5c3d] tabular-nums hidden sm:block">
-            {(win.tokens / 1000).toFixed(1)}k tok
+          {/* UPDATE: window/spent per observability.md#fleetview (↓ window input+cache-read, ↕ spent cumulative) + processTerminal per observability.md#process-terminal-proof */}
+          <span className="text-[9px] text-[#3d5c3d] tabular-nums hidden sm:block" title={win.windowTokens !== undefined && win.spentTokens !== undefined ? `window ${win.windowTokens} · spent ${win.spentTokens}` : undefined}>
+            {win.windowTokens !== undefined && win.spentTokens !== undefined && win.windowTokens !== win.spentTokens ? `${(win.windowTokens/1000).toFixed(1)}k↓ ${(win.spentTokens/1000).toFixed(1)}k↕` : `${(win.tokens / 1000).toFixed(1)}k tok`}
           </span>
           <span className="text-[9px] text-[#3d5c3d] tabular-nums">{win.elapsed}s</span>
           {win.totalCost ? <span className="text-[8px] text-[#ffb547] hidden sm:block">${Number(win.totalCost).toFixed(4)}</span> : null}
@@ -162,6 +195,8 @@ function AgentWindowCard({ win, isActive, onClick }: { win: AgentWindow; isActiv
               ✓ {win.launchResolvedExtensions.slice(0,2).join(',').slice(0,12)}
             </span>
           )}
+          {/* UPDATE: processTerminal badge — observed only after runner close + lease free, else unknown (do not infer from endedAt) */}
+          {win.processTerminal === 'observed' ? <span className="text-[7px] text-[#39ff6e] hidden sm:block" title="process-terminal observed (runner close + lease free)">● observed</span> : win.processTerminal === 'unknown' ? <span className="text-[7px] text-[#ffb547] hidden sm:block" title="process-terminal unknown — do not infer from endedAt">○ unknown</span> : null}
           <StatusDot status={win.status} />
         </div>
       </div>
@@ -287,7 +322,8 @@ function Sidebar({
               </span>
             </div>
             <div className="flex items-center gap-1 flex-wrap mt-1">
-              {conv.tags.map((t) => (
+              {/* UPDATE: explicit t:string fixes TS7006 (strict:true) */}
+              {conv.tags.map((t: string) => (
                 <TagBadge key={t} tag={t} />
               ))}
             </div>
@@ -493,6 +529,9 @@ export default function App() {
     return () => window.removeEventListener('keydown', h);
   }, [modalAgentId, showHelp, windows]);
 
+  // UPDATE: lastConversationsJsonRef — deep-equality guard per observability.md + extension-api.md fleet DTO (bounded 64KB/200) — prevents setConversations(newArray) every 500ms SSE + 1s poll when file/title unchanged (root cause of modal flicker)
+  const lastConversationsJsonRef = useRef<string | null>(null);
+
   // Fetch real sessions + fleet + stats — synced to /subagents-fleet, 1s poll for real-time. Fixed flash bug: initial FALLBACK_WINDOWS/FALLBACK_CONVERSATIONS caused static flash on refresh then replaced by dynamic.
   useEffect(() => {
     let cancelled = false;
@@ -508,9 +547,16 @@ export default function App() {
         // sRes === [] => backend reachable but no sessions -> show empty, NOT fallback
         // Only FALLBACK on error keeps static from flashing on every refresh
         if (Array.isArray(sRes)) {
-          setConversations(sRes);
-        } else if (sRes === null && conversations === null) {
-          // first load failed - show fallback instead of infinite skeleton
+          // UPDATE: Deep-equality guard — skip setState if JSON identical so conversations ref stays stable (prevents modal re-fetch loop per observability.md host-inspection protocol)
+          const json = JSON.stringify(sRes);
+          if (json !== lastConversationsJsonRef.current) {
+            lastConversationsJsonRef.current = json;
+            setConversations(sRes);
+          }
+        } else if (sRes === null && lastConversationsJsonRef.current === null) {
+          // UPDATE: Fix stale closure (conversations === null inside effect with [] deps always true) → use ref; first load failed - show fallback instead of infinite skeleton
+          const json = JSON.stringify(FALLBACK_CONVERSATIONS);
+          lastConversationsJsonRef.current = json;
           setConversations(FALLBACK_CONVERSATIONS);
         } else if (sRes === null) {
           // subsequent poll failed - keep previous dynamic data, don't revert to static
@@ -623,19 +669,32 @@ export default function App() {
   };
 
   const sessForModal = modalAgentId?.startsWith('__session_') ? (conversations ?? []).find(c=>c.id===parseInt(modalAgentId.replace('__session_',''))) : null;
-  const modalWinRaw = modalAgentId ? ((windows as any).find((w:any)=>w.id===modalAgentId) || (modalAgentId.startsWith('__session_') ? {id:modalAgentId, agent: (sessForModal?.agent || sessForModal?.tags?.[0] || 'SESSION').toUpperCase(), task: sessForModal?.title || sessForModal?.preview || '', status:'done', model:'', tokens:0, elapsed:0, lines: sessionLines.length ? sessionLines : [], file: sessForModal?.file} as any : null)) : null;
-  const modalWin = modalWinRaw;
-  const modalCmd = modalWin?.file || modalWin?.sessionFile ? `pi --session "${modalWin.file||modalWin.sessionFile}"` : modalWin ? `pi --session ${modalWin.id}` : "";
-  const modalDockerCmd = modalWin?.file || modalWin?.sessionFile ? `docker exec -it pi-personal-agent pi --session "${modalWin.file||modalWin.sessionFile}"` : modalWin ? `docker exec -it pi-personal-agent pi --session ${modalWin.id}` : "";
+  // UPDATE: modalFile stable string per tool-reference.md — sessionFile is FK between sessions (*.jsonl) and fleet status.json
+  const modalFile = useMemo(() => sessForModal?.file ?? null, [sessForModal?.file]);
+  // UPDATE: Split derivation — fleetHit only for fleet modals (depends on windows), sessionModalObj only for __session_ (depends on file + sessionLines). Prevents windows poll (1s) from recreating session modal every tick (observability.md#fleet-inspector)
+  const fleetHit = useMemo(() => {
+    if (!modalAgentId || modalAgentId.startsWith('__session_')) return null;
+    return (windows as any).find((w:any)=>w.id===modalAgentId) ?? null;
+  }, [modalAgentId, windows]);
+  const sessionModalObj = useMemo(() => {
+    if (!modalAgentId?.startsWith('__session_')) return null;
+    return {id:modalAgentId, agent: (sessForModal?.agent || sessForModal?.tags?.[0] || 'SESSION').toUpperCase(), task: sessForModal?.title || sessForModal?.preview || '', status:'done', model:'', tokens:0, elapsed:0, lines: sessionLines.length ? sessionLines : [], file: modalFile} as any;
+  }, [modalAgentId, sessForModal, sessionLines, modalFile]);
+  const modalWinRaw = fleetHit ?? sessionModalObj;
+  // UPDATE: Stable modalWin — only update when id/lines length/file/status changes, not on every windows poll (fixes max-h-[380px] full remount per observability.md#fleet-inspector x/Ctrl+O)
+  const modalWin = useMemo(() => modalWinRaw, [modalWinRaw?.id, modalWinRaw?.lines?.length, modalFile, modalWinRaw?.status, modalWinRaw?.elapsed]);
+  const modalCmd = useMemo(() => modalWin?.file || (modalWin as any)?.sessionFile ? `pi --session "${modalWin.file||(modalWin as any).sessionFile}"` : modalWin ? `pi --session ${modalWin.id}` : "", [modalWin]);
+  const modalDockerCmd = useMemo(() => modalWin?.file || (modalWin as any)?.sessionFile ? `docker exec -it pi-personal-agent pi --session "${modalWin.file||(modalWin as any).sessionFile}"` : modalWin ? `docker exec -it pi-personal-agent pi --session ${modalWin.id}` : "", [modalWin]);
 
-  // Fetch session transcript when opening left-panel session (which has no fleet lines) — fixes "waiting for logs..." bug + stuck loading
+  // UPDATE: Fetch session transcript — depends only on modalAgentId + modalFile string (not whole conversations array) to avoid re-fetch loop on every 1s poll + 500ms SSE (root cause: conversations new [] every fetchAll) — per observability.md#async-run-artifacts sessions are static *.jsonl
+  // Fixes "waiting for logs..." bug + stuck loading + flicker LOADED→loading
   useEffect(() => {
     if (!modalAgentId || !modalAgentId.startsWith('__session_')) {
       if (sessionLines.length) setSessionLines([]);
       if (sessionLoading) setSessionLoading(false);
       return;
     }
-    const file = (conversations ?? []).find(c=>c.id===parseInt(modalAgentId.replace('__session_','')))?.file;
+    const file = modalFile; // UPDATE: stable file string, not conversations array identity
     if (!file) {
       setSessionLines([{ts:'--',kind:'err',text:'session file not found in conversations'}]);
       setSessionLoading(false);
@@ -682,7 +741,7 @@ export default function App() {
     };
     load();
     return () => { cancelled = true; };
-  }, [modalAgentId, conversations]);
+  }, [modalAgentId, modalFile]); // UPDATE: was [modalAgentId, conversations] → now stable file string (sessionFetches 4→1 per repro-modal-flicker.js)
 
   const runningCount = windows.filter((w: any) => w.status === "running").length;
   const waitingCount = windows.filter((w: any) => w.status === "waiting").length;
@@ -793,7 +852,8 @@ export default function App() {
                 <span className="text-[9px] text-[#3d5c3d] hidden sm:block">{(modalWin as any).fleetState || modalWin.status} · {(modalWin as any).toolCount||0} tools · {(modalWin as any).turnCount||0} turns</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[9px] text-[#3d5c3d] hidden sm:block">{modalWin.model} · {modalWin.tokens} tok · {modalWin.elapsed}s</span>
+                {/* UPDATE: window/spent + processTerminal per observability.md#fleetview + #process-terminal-proof */}
+                <span className="text-[9px] text-[#3d5c3d] hidden sm:block" title={ (modalWin as any).windowTokens !== undefined ? `window ${(modalWin as any).windowTokens} · spent ${(modalWin as any).spentTokens}` : undefined}>{modalWin.model} · { (modalWin as any).windowTokens !== undefined && (modalWin as any).spentTokens !== undefined ? `${(modalWin as any).windowTokens}↓ ${(modalWin as any).spentTokens}↕` : `${modalWin.tokens} tok`} · {modalWin.elapsed}s {(modalWin as any).processTerminal ? `· ${(modalWin as any).processTerminal}` : ''}</span>
                 <button onClick={()=>setModalAgentId(null)} className="text-[#3d5c3d] hover:text-[#c8e6c8] text-[12px] px-2">✕</button>
               </div>
             </div>
@@ -814,11 +874,9 @@ export default function App() {
                     <span>{String(modalWin.id).startsWith('__session_') ? `session transcript — ${modalWin.file?.split('/').pop() || modalWin.id}` : "live log — status.json + output-*.log (1s poll, same as fleet)"}</span>
                     <span className="text-[#39ff6e] animate-pulse">● {String(modalWin.id).startsWith('__session_') ? (sessionLoading ? "loading..." : "loaded") : `live ${modalWin.elapsed}s`} {showToolDetails?"· tools on":"· tools off"}</span>
                   </div>
+                  {/* UPDATE: LogLineView memo + stable key per observability.md#fleet-inspector x/Ctrl+O — prevents full max-h-[380px] remount */}
                   {(String(modalWin.id).startsWith('__session_') && sessionLoading ? [{ts:"--",kind:"info" as const,text:"loading session..."}] : (modalWin.lines && modalWin.lines.length ? modalWin.lines : [{ts:"--",kind:"info" as const,text:"waiting for logs..."}])).filter((l:any)=>showToolDetails || l.kind!=="tool").map((l:any,i:number)=>(
-                    <div key={i} className="flex gap-2 text-[10px] leading-relaxed">
-                      <span style={{color:"#3d5c3d"}} className="shrink-0 tabular-nums">{l.ts}</span>
-                      <span style={{color: l.kind==="err"?"#ff4d4d": l.kind==="tool"?"#ffb547": l.kind==="info"?"#4da6ff":"#6b9b6b"}} className="break-all">{l.text}</span>
-                    </div>
+                    <LogLineView key={`${modalWin.id}-${i}-${l.ts}`} line={l} />
                   ))}
                   {modalWin.status==="running" && !String(modalWin.id).startsWith('__session_') && <div className="flex gap-2 text-[10px] mt-2"><span style={{color:"#3d5c3d"}}>{new Date().toLocaleTimeString("en-GB")}</span><span style={{color: AGENT_COLORS[modalWin.agent]||"#39ff6e"}} className="cursor-blink">▋</span></div>}
                 </>
@@ -827,7 +885,8 @@ export default function App() {
                 <div className="text-[10px] text-[#6b9b6b] space-y-1">
                   <div className="text-[9px] text-[#3d5c3d] uppercase">transcript — subagent({`action:"status", id:"${modalWin.runId||modalWin.id}", view:"transcript", lines:200`})</div>
                   <div className="border border-[#1e2b1e] bg-[#111411] p-3 rounded-sm max-h-[260px] overflow-y-auto">
-                    {(modalWin.lines||[]).map((l:any,i:number)=><div key={i} className="flex gap-2"><span className="text-[#3d5c3d] shrink-0">{l.ts}</span><span className="break-all" style={{color: l.kind==="tool"?"#ffb547":"#c8e6c8"}}>{l.text}</span></div>)}
+                    {/* UPDATE: LogLineView memo for transcript tab */}
+                    {(modalWin.lines||[]).map((l:any,i:number)=><LogLineView key={`${modalWin.id}-t-${i}-${l.ts}`} line={l} />)}
                     <div className="text-[9px] text-[#3d5c3d] mt-2">Full transcript via: <code className="text-[#4da6ff]">subagent status {modalWin.runId||modalWin.id} transcript</code></div>
                   </div>
                 </div>
