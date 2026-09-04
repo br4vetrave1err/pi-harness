@@ -1,6 +1,10 @@
 FROM ubuntu:24.04 AS base
+# Deterministic substrate: pinned ubuntu:24.04, node 22.x, pi 0.84.4 — layers ordered for cache reuse (apt → node → pi → extensions)
+ARG DEBIAN_FRONTEND=noninteractive
+ARG NODE_MAJOR=22
+ARG PI_VERSION=0.84.4
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     python3 \
     python3-pip \
@@ -8,12 +12,16 @@ RUN apt-get update && apt-get install -y \
     bash \
     ca-certificates \
     gnupg \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install -y nodejs
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    node --version && npm --version && \
+    rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_VERSION} && \
+    pi --version
 
 # Install pi-freeflow exclusively via pi CLI (do NOT use npm install -g pi-freeflow)
 # This avoids version skew between /opt and /root/.pi/agent/npm
@@ -29,21 +37,42 @@ RUN pi install npm:pi-web-access && \
     pi list && \
     mkdir -p /opt/feynman && npm install --prefix /opt/feynman --ignore-scripts @companion-ai/feynman && \
     ln -sf /opt/feynman/node_modules/@companion-ai/feynman/bin/feynman.js /usr/local/bin/feynman && \
-    feynman --version && \
-    mkdir -p /root/.pi/agent/agents && echo "installed feynman standalone $(feynman --version)"
+    mkdir -p /root/.pi/agent/agents && echo "installed feynman base"
+
+# Patch feynman EXDEV rename bug (cross-device) — runtime workspace restore fails in overlay
+RUN python3 << 'PYF'
+import pathlib, re
+p = pathlib.Path('/opt/feynman/node_modules/@companion-ai/feynman/scripts/lib/runtime-workspace-restore.mjs')
+t = p.read_text()
+if 'renameOrCopySync' not in t:
+    t = t.replace('renameSync,', 'renameSync,\n\tcpSync,')
+    helper = '\n// Helper: rename with EXDEV fallback (cross-device)\nfunction renameOrCopySync(src, dest) {\n  try { return renameSync(src, dest); } catch (e) {\n    if (e && e.code === "EXDEV") {\n      cpSync(src, dest, { recursive: true, force: true });\n      rmSync(src, { recursive: true, force: true });\n      return;\n    }\n    throw e;\n  }\n}\n'
+    t = t.replace('} from "node:fs";', '} from "node:fs";' + helper)
+    placeholder='__RENAMESYNC_HELPER__'
+    t = t.replace('return renameSync(src, dest);', f'return {placeholder}(src, dest);')
+    t = re.sub(r'renameSync\(', 'renameOrCopySync(', t)
+    t = t.replace(f'{placeholder}(', 'renameSync(')
+    p.write_text(t)
+    print('patched feynman EXDEV')
+PYF
+RUN feynman --version && echo "feynman $(feynman --version) ready"
 
 # Patch pi-freeflow proxy to clamp max_completion_tokens for AtlasCloud (dots) – empirical limit ~390k, advertised 512k causes 400 bad request
 # See debugging in workspace/*.py – pi sends max_completion_tokens 506566 which fails at >390k
 RUN python3 << 'PY'
 import pathlib
-p = pathlib.Path('/opt/pi-freeflow/src/proxy.ts')
-t = p.read_text()
-if 'AtlasCloud safe limit' not in t:
-    if 'getModelDef' not in t:
-        t = t.replace('import { KILO_MODEL_IDS, resolveCanonicalModelId } from "./models.ts";',
-                      'import { KILO_MODEL_IDS, getModelDef, resolveCanonicalModelId } from "./models.ts";')
-    old = 'if (isKilo && parsedBody) {\n'
-    new = '''if (isKilo && parsedBody) {
+def patch_file(path):
+    p = pathlib.Path(path)
+    if not p.exists():
+        print(f'skip missing {path}')
+        return
+    t = p.read_text()
+    if 'AtlasCloud safe limit' not in t:
+        if 'getModelDef' not in t:
+            t = t.replace('import { KILO_MODEL_IDS, resolveCanonicalModelId } from "./models.ts";',
+                          'import { KILO_MODEL_IDS, getModelDef, resolveCanonicalModelId } from "./models.ts";')
+        old = 'if (isKilo && parsedBody) {\n'
+        new = '''if (isKilo && parsedBody) {
                     // Clamp max_completion_tokens to AtlasCloud safe limit (dots fails >390k, advertised 512k is overstated)
                     try {
                         const modelDef = getModelDef(parsedBody.model as string);
@@ -70,26 +99,36 @@ if 'AtlasCloud safe limit' not in t:
                         }
                     } catch {}
 '''
-    if old in t:
-        t = t.replace(old, new)
-        p.write_text(t)
-        print('patched proxy clamp')
+        if old in t:
+            t = t.replace(old, new)
+            p.write_text(t)
+            print(f'patched proxy clamp {path}')
+for fp in ['/opt/pi-freeflow/src/proxy.ts', '/root/.pi/agent/npm/node_modules/pi-freeflow/src/proxy.ts']:
+    patch_file(fp)
 # Also correct model definition advertised maxTokens for dots (512k -> 390k) to prevent pi from requesting too much
-p2 = pathlib.Path('/opt/pi-freeflow/src/models.ts')
-t2 = p2.read_text()
-old2 = 'id: "dots-studio/dots-3-note-preview:free",\n\t\tname: "Dots3-Note Preview (512K)",\n\t\treasoning: true,\n\t\tcontextWindow: 512_000,\n\t\tmaxTokens: 512_000,'
-new2 = 'id: "dots-studio/dots-3-note-preview:free",\n\t\tname: "Dots3-Note Preview (390K)",\n\t\treasoning: true,\n\t\tcontextWindow: 512_000,\n\t\tmaxTokens: 390_000,'
-if old2 in t2:
-    t2 = t2.replace(old2, new2)
-    p2.write_text(t2)
-    print('fixed dots model')
+for fp in ['/opt/pi-freeflow/src/models.ts', '/root/.pi/agent/npm/node_modules/pi-freeflow/src/models.ts']:
+    p2 = pathlib.Path(fp)
+    if not p2.exists():
+        print(f'skip missing {fp}')
+        continue
+    t2 = p2.read_text()
+    old2 = 'id: "dots-studio/dots-3-note-preview:free",\n\t\tname: "Dots3-Note Preview (512K)",\n\t\treasoning: true,\n\t\tcontextWindow: 512_000,\n\t\tmaxTokens: 512_000,'
+    new2 = 'id: "dots-studio/dots-3-note-preview:free",\n\t\tname: "Dots3-Note Preview (390K)",\n\t\treasoning: true,\n\t\tcontextWindow: 512_000,\n\t\tmaxTokens: 390_000,'
+    if old2 in t2:
+        t2 = t2.replace(old2, new2)
+        p2.write_text(t2)
+        print(f'fixed dots model {fp}')
+    elif '390_000' in t2:
+        print(f'already 390k {fp}')
 PY
 
 RUN mkdir -p /tools /workspace /.pi
 
-# Bake coder sub-agent (all 4 extensions) into image
+# Bake coder sub-agent (all 4 extensions) into image — deterministic: single source file copied to two locations
 COPY .pi/agents/coder.md /root/.pi/agent/agents/coder.md
 COPY .pi/agents/coder.md /workspace/.pi/agents/coder.md
+# Verify bake integrity at build time
+RUN sha256sum /root/.pi/agent/agents/coder.md && sha256sum /workspace/.pi/agents/coder.md && test "$(sha256sum /root/.pi/agent/agents/coder.md | cut -d' ' -f1)" = "$(sha256sum /workspace/.pi/agents/coder.md | cut -d' ' -f1)"
 
 COPY slack_webhook.sh /tools/slack_webhook.sh
 COPY task_watcher.sh /tools/task_watcher.sh

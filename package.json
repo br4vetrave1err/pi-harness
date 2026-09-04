@@ -1,0 +1,11 @@
+{
+  "scripts": {
+    "lint:agents": "node tests/lint/agents.mjs",
+    "lint:infra": "shellcheck dashboard.sh .pi/dashboard.sh git-sync.sh task_watcher.sh slack_webhook.sh docker-entrypoint.sh || echo \"shellcheck not installed, use bash -n\"",
+    "test": "npm --prefix dashboard run test:cov 2>&1 | head -n 100",
+    "test:e2e": "node test_ui_playwright.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}

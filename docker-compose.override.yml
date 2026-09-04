@@ -9,7 +9,10 @@ services:
     build: ./dashboard
     working_dir: /app
     # Hot reload: run API (3001) + Vite dev (5173) concurrently, both auto-reload on src change
-    command: sh -c "npm install --silent && PORT=3001 node server.js & npm run dev -- --host 0.0.0.0 --port 5173 --strictPort"
+    # FIX: server must start immediately — previous `npm install --silent && PORT=3001 node server.js &` blocked
+    # server behind a hanging npm install (ECONNREFUSED /api/*). Now server starts first, npm install runs
+    # in background (non-blocking) so Vite proxy never sees ECONNREFUSED.
+    command: sh -c "(npm install --silent || true) & PORT=3001 node server.js & npm run dev -- --host 0.0.0.0 --port 5173 --strictPort"
     volumes:
       # hot reload: src changes in Windows instantly visible in container (ro is fine, Vite watches via poll)
       - E:/projects/pi-harness/dashboard/src:/app/src:ro
@@ -23,7 +26,8 @@ services:
       # API needs same mounts as prod
       - E:/projects/pi-harness/.pi:/root/.pi:ro
       - E:/projects/pi-harness:/workspace:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - pi-subagents:/tmp/pi-subagents-uid-0
     ports:
       - "5173:5173"  # Vite HMR — open http://localhost:5173 for hot reload
       - "3000:3001"  # API + prod preview fallback

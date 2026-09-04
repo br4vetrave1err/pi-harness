@@ -36,6 +36,7 @@ services:
       - E:/projects/pi-harness:/workspace
       # Keep .pi mounted separately so sessions survive rebuilds (also visible as /workspace/.pi)
       - E:/projects/pi-harness/.pi:/root/.pi
+      - pi-subagents:/tmp/pi-subagents-uid-0
       # Optional isolated task dir – host E:/projects/pi-harness/workspace appears as /workspace/workspace inside container
       # If you prefer empty /workspace, revert to: E:/projects/pi-harness/workspace:/workspace
 
@@ -68,7 +69,8 @@ services:
     volumes:
       - E:/projects/pi-harness/.pi:/root/.pi:ro
       - E:/projects/pi-harness:/workspace:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - pi-subagents:/tmp/pi-subagents-uid-0
     environment:
       - PORT=3001
       - SESSIONS_DIR=/root/.pi/agent/sessions/--workspace--
@@ -109,3 +111,6 @@ services:
           sleep 15
         done
     profiles: ["git-sync"]  # run with: docker compose --profile git-sync up -d
+
+volumes:
+  pi-subagents:
