@@ -1,0 +1,37 @@
+# Local dev override — auto-applied by `docker compose up`
+# - Dashboard hot reload (no rebuild on src change)
+# - git-sync disabled (already profile-only, this ensures it stays off)
+
+services:
+  # Dashboard: hot reload via Vite dev server + API still on :3001
+  # Edit dashboard/src/App.tsx in Windows → browser at http://localhost:5173 hot-reloads instantly
+  dashboard:
+    build: ./dashboard
+    working_dir: /app
+    # Hot reload: run API (3001) + Vite dev (5173) concurrently, both auto-reload on src change
+    command: sh -c "npm install --silent && PORT=3001 node server.js & npm run dev -- --host 0.0.0.0 --port 5173 --strictPort"
+    volumes:
+      # hot reload: src changes in Windows instantly visible in container (ro is fine, Vite watches via poll)
+      - E:/projects/pi-harness/dashboard/src:/app/src:ro
+      - E:/projects/pi-harness/dashboard/src/index.css:/app/src/index.css:ro
+      - E:/projects/pi-harness/dashboard/src/App.tsx:/app/src/App.tsx:ro
+      - E:/projects/pi-harness/dashboard/src/main.tsx:/app/src/main.tsx:ro
+      - E:/projects/pi-harness/dashboard/package.json:/app/package.json:ro
+      - E:/projects/pi-harness/dashboard/vite.config.ts:/app/vite.config.ts:ro
+      - E:/projects/pi-harness/dashboard/index.html:/app/index.html:ro
+      - E:/projects/pi-harness/dashboard/server.js:/app/server.js:ro
+      # API needs same mounts as prod
+      - E:/projects/pi-harness/.pi:/root/.pi:ro
+      - E:/projects/pi-harness:/workspace:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "5173:5173"  # Vite HMR — open http://localhost:5173 for hot reload
+      - "3000:3001"  # API + prod preview fallback
+    environment:
+      - PORT=3001
+      - SESSIONS_DIR=/root/.pi/agent/sessions/--workspace--
+      - SUBAGENT_RUNS=/tmp/pi-subagents-uid-0/async-subagent-runs
+    # TIP: for prod (no hot reload, just built static): docker compose -f docker-compose.yml up -d --build
+  # Ensure git-sync is not started in local dev (profile-only already, but explicit)
+  git-sync:
+    profiles: ["git-sync"]  # must use --profile git-sync to start, so `docker compose up` alone will NOT start it
