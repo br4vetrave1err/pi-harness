@@ -154,6 +154,14 @@ function AgentWindowCard({ win, isActive, onClick }: { win: AgentWindow; isActiv
             {(win.tokens / 1000).toFixed(1)}k tok
           </span>
           <span className="text-[9px] text-[#3d5c3d] tabular-nums">{win.elapsed}s</span>
+          {win.totalCost ? <span className="text-[8px] text-[#ffb547] hidden sm:block">${Number(win.totalCost).toFixed(4)}</span> : null}
+          {win.workflowGraph && <span className="text-[8px] text-[#4da6ff] hidden lg:block">{win.workflowGraph?.flow || win.workflowGraph?.type || 'flow'}</span>}
+          {win.children && win.children.length > 0 && <span className="text-[8px] text-[#c084fc]">+{win.children.length}c</span>}
+          {win.launchResolvedExtensions && win.launchResolvedExtensions.length > 0 && (
+            <span className="text-[7px] text-[#39ff6e] hidden sm:block" title={win.launchResolvedExtensions.join(',')}>
+              ✓ {win.launchResolvedExtensions.slice(0,2).join(',').slice(0,12)}
+            </span>
+          )}
           <StatusDot status={win.status} />
         </div>
       </div>
@@ -163,6 +171,15 @@ function AgentWindowCard({ win, isActive, onClick }: { win: AgentWindow; isActiv
         {win.lines.map((l, i) => (
           <LogLineView key={i} line={l} />
         ))}
+        {win.children && win.children.length > 0 && (
+          <div className="mt-2 border-t border-[#1e2b1e] pt-1">
+            {win.children.map((c:any, idx:number) => (
+              <div key={idx} className="ml-3 pl-2 border-l border-[#1e2b1e] text-[9px] text-[#6b9b6b] flex gap-2">
+                <span>↳ {c.agent || c.workflowKey || 'child'}</span><span className="text-[#3d5c3d] truncate">{c.task?.slice(0,30) || c.runId?.slice(0,8)}</span><span className="text-[#3d5c3d]">{c.state || ''}</span>
+              </div>
+            ))}
+          </div>
+        )}
         {win.status === "running" && (
           <div className="flex gap-2 text-[10px] mt-1">
             <span style={{ color: "#3d5c3d" }} className="shrink-0 tabular-nums">
@@ -507,13 +524,32 @@ export default function App() {
               agent: f.agent || f.rawAgent || "CODER",
               task: f.task || f.runId,
               status: f.status || f.fleetState,
+              fleetState: f.fleetState || f.status,
               model: f.model || "muse-spark-1.2-free",
               tokens: f.tokens || 0,
+              windowTokens: f.windowTokens || f.tokens || 0,
+              spentTokens: f.spentTokens || f.tokens || 0,
+              totalCost: f.totalCost || 0,
               elapsed: f.elapsed || 0,
+              durationMs: f.durationMs || 0,
               lines: f.lines || [],
               file: f.sessionFile,
               sessionFile: f.sessionFile,
-              toolCount: f.toolCount,
+              sessionId: f.sessionId || null,
+              toolCount: f.toolCount || 0,
+              turnCount: f.turnCount || 0,
+              lifecycleArtifactVersion: f.lifecycleArtifactVersion || null,
+              mode: f.mode || null,
+              endedAt: f.endedAt || null,
+              workflowGraph: f.workflowGraph || null,
+              steps: f.steps || [],
+              results: f.results || [],
+              launchResolvedExtensions: f.launchResolvedExtensions || [],
+              runtimeAcknowledgedExtensions: f.runtimeAcknowledgedExtensions || [],
+              modelAttempts: f.modelAttempts || null,
+              children: f.children || [],
+              cwd: f.cwd || null,
+              asyncDir: f.asyncDir || null,
             }));
             // Medium windows = ACTIVE only (running/waiting). Don't show stale DONE like screenshot 4 windows.
             // Backend already filters to active + recent (30s done, 60s error), frontend double-filters to running/waiting for strict active view.
@@ -820,13 +856,28 @@ export default function App() {
                 </div>
               )}
               {activeTab==="session" && (
-                <div className="text-[10px] text-[#6b9b6b]">
-                  <div className="text-[9px] text-[#3d5c3d] uppercase">session</div>
-                  <div className="border border-[#1e2b1e] bg-[#111411] p-3 rounded-sm">
-                    <div>runId: <code className="text-[#c8e6c8]">{modalWin.runId||modalWin.id}</code></div>
-                    <div>agent: <code className="text-[#c8e6c8]">{modalWin.agent}</code> · model: {modalWin.model}</div>
-                    <div>tokens window/spent: {modalWin.tokens} · elapsed: {modalWin.elapsed}s</div>
-                    <div className="mt-2 text-[9px] text-[#3d5c3d]">Fleet fields: lifecycleArtifactVersion, runId, sessionId, mode, state, startedAt, durationMs, cwd, asyncDir, sessionFile, workflowGraph, steps, results, totalTokens, totalCost, toolCount, turnCount, launchResolvedExtensions, runtimeAcknowledgedExtensions, children</div>
+                <div className="text-[10px] text-[#6b9b6b] space-y-2">
+                  <div className="text-[9px] text-[#3d5c3d] uppercase">session — full status.json</div>
+                  <div className="border border-[#1e2b1e] bg-[#111411] p-3 rounded-sm space-y-1">
+                    <div>runId: <code className="text-[#c8e6c8]">{modalWin.runId||modalWin.id}</code> · id: {(modalWin as any).id} · fullId: {(modalWin as any).fullId}</div>
+                    <div>sessionId: <code className="text-[#ffb547] break-all">{(modalWin as any).sessionId || (modalWin as any).sessionFile || '--'}</code></div>
+                    <div>mode: <code className="text-[#c8e6c8]">{(modalWin as any).mode || '--'}</code> · state: {(modalWin as any).fleetState||modalWin.status} · lifecycle: {(modalWin as any).lifecycleArtifactVersion || '--'}</div>
+                    <div>startedAt: {new Date((modalWin as any).startedAt||0).toLocaleString()} · endedAt: {(modalWin as any).endedAt ? new Date((modalWin as any).endedAt).toLocaleString() : '--'} · duration: {modalWin.elapsed}s ({(modalWin as any).durationMs||0}ms)</div>
+                    <div>tokens window/spent: {(modalWin as any).windowTokens||modalWin.tokens} / {(modalWin as any).spentTokens||modalWin.tokens} · totalCost: ${(modalWin as any).totalCost ? `$${Number((modalWin as any).totalCost).toFixed(4)}` : '--'} · cwd: {(modalWin as any).cwd||'--'}</div>
+                    <div>model: {modalWin.model} · attempts: {(modalWin as any).modelAttempts ? JSON.stringify((modalWin as any).modelAttempts).slice(0,60) : '--'}</div>
+                    <div>launchResolved: <span className="text-[#39ff6e]">{((modalWin as any).launchResolvedExtensions||[]).join(', ') || '--'}</span> · runtimeAck: <span className="text-[#4da6ff]">{((modalWin as any).runtimeAcknowledgedExtensions||[]).join(', ') || '--'}</span> {(modalWin as any).launchResolvedExtensions?.length ? <span className="text-[#39ff6e] ml-1">✓ ack</span> : null}</div>
+                    {(modalWin as any).workflowGraph && <div>workflowGraph: <code className="text-[#4da6ff] break-all">{JSON.stringify((modalWin as any).workflowGraph).slice(0,120)}</code></div>}
+                    {(modalWin as any).children && (modalWin as any).children.length>0 && (
+                      <div>children ({(modalWin as any).children.length}):
+                        <div className="ml-2 mt-1 space-y-1">
+                          {(modalWin as any).children.map((c:any,i:number)=>(
+                            <div key={i} className="ml-2 pl-2 border-l border-[#1e2b1e]">↳ {c.agent||c.workflowKey} {c.runId?.slice(0,8)} {c.state} {c.task?.slice(0,40)}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {(modalWin as any).steps && (modalWin as any).steps.length>0 && <div>steps: {(modalWin as any).steps.length} · results: {(modalWin as any).results?.length||0}</div>}
+                    <div>toolCount: {(modalWin as any).toolCount||0} · turnCount: {(modalWin as any).turnCount||0} · asyncDir: <code className="text-[#3d5c3d] break-all">{(modalWin as any).asyncDir||'--'}</code></div>
                   </div>
                 </div>
               )}

@@ -95,6 +95,25 @@ function readFleetStatus() {
         // Map fleet state to dashboard status
         const dashboardStatus = state === 'running' || state === 'pending' ? 'running' : state === 'paused' ? 'waiting' : state === 'complete' ? 'done' : state === 'failed' ? 'error' : state === 'stopped' ? 'error' : state;
 
+        // Extended fields: expose full status.json per observability spec
+        const totalCost = j.totalCost || 0;
+        const lifecycleArtifactVersion = j.lifecycleArtifactVersion || null;
+        const mode = j.mode || null;
+        const endedAt = j.endedAt || null;
+        const workflowGraph = j.workflowGraph || null;
+        const steps = j.steps || [];
+        const results = j.results || [];
+        const launchResolvedExtensions = j.launchResolvedExtensions || [];
+        const runtimeAcknowledgedExtensions = j.runtimeAcknowledgedExtensions || [];
+        const modelAttempts = j.modelAttempts || null;
+        const children = j.children || [];
+        // window/spent distinction: totalTokens object window vs total
+        let windowTokens = totalTokens;
+        let spentTokens = totalTokens;
+        if (typeof j.totalTokens === 'object' && j.totalTokens !== null) {
+          windowTokens = j.totalTokens.window || j.totalTokens.input || totalTokens;
+          spentTokens = j.totalTokens.total || j.totalTokens.output || totalTokens;
+        }
         fleet.push({
           runId,
           id: runId.slice(0, 8),
@@ -106,6 +125,9 @@ function readFleetStatus() {
           fleetState: state,
           model: j.model || 'muse-spark-1.2-free',
           tokens: totalTokens || Math.floor(Math.random()*5000)+1000, // fallback if not yet reported
+          windowTokens,
+          spentTokens,
+          totalCost,
           elapsed: Math.floor(durationMs/1000) || Math.floor((Date.now()-startedAt)/1000) || 0,
           durationMs,
           lines,
@@ -115,6 +137,16 @@ function readFleetStatus() {
           turnCount,
           startedAt,
           lastUpdate: j.lastUpdate || 0,
+          endedAt,
+          lifecycleArtifactVersion,
+          mode,
+          workflowGraph,
+          steps,
+          results,
+          launchResolvedExtensions,
+          runtimeAcknowledgedExtensions,
+          modelAttempts,
+          children,
           cwd: j.cwd || null,
           asyncDir: dir,
         });
@@ -574,6 +606,30 @@ app.post('/api/fleet/:id/stop', (req, res) => {
     return res.json({status:'stop_queued', runId: hit.runId, note:'stop.requested written — use subagent({action:"stop", id:"'+hit.runId+'"}) for authoritative stop or /subagents-fleet D'});
   } catch(e){ return res.status(500).json({error:String(e)}); }
 });
+
+// GC: remove failed/completed runs older than 10min to prevent disk leak (stale GC + TTL already hides them)
+setInterval(() => {
+  try {
+    const now = Date.now();
+    const GC_TTL = 10*60*1000;
+    if (!fs.existsSync(SUBAGENT_RUNS)) return;
+    const dirs = fs.readdirSync(SUBAGENT_RUNS, { withFileTypes: true }).filter(d => d.isDirectory());
+    for (const d of dirs) {
+      const dir = path.join(SUBAGENT_RUNS, d.name);
+      const statusFile = path.join(dir, 'status.json');
+      if (!fs.existsSync(statusFile)) continue;
+      try {
+        const j = JSON.parse(fs.readFileSync(statusFile,'utf-8'));
+        const state = j.state || j.status || 'unknown';
+        const lastUpdate = j.lastUpdate || j.startedAt || 0;
+        if ((state==='failed'||state==='complete'||state==='stopped'||state==='error') && lastUpdate && (now - lastUpdate > GC_TTL)) {
+          fs.rmSync(dir, { recursive:true, force:true });
+          console.log(`[dashboard-api] GC removed ${d.name} state=${state} age=${Math.round((now-lastUpdate)/1000)}s`);
+        }
+      } catch {}
+    }
+  } catch {}
+}, 60000);
 
 if (fs.existsSync(DIST)) {
   app.use(express.static(DIST));

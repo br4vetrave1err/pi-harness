@@ -39,7 +39,7 @@ jobs:
             type=sha,prefix={{branch}}-
             type=ref,event=branch
 
-      - name: Build and push
+      - name: Build and push (pi_agent)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -50,10 +50,32 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
 
+      - name: Extract metadata (dashboard)
+        id: meta_dashboard
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-dashboard
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix={{branch}}-
+            type=ref,event=branch
+
+      - name: Build and push (dashboard)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./dashboard
+          push: true
+          tags: ${{ steps.meta_dashboard.outputs.tags }}
+          labels: ${{ steps.meta_dashboard.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+
       - name: Summary
         run: |
           echo "✅ Pushed ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
-          echo "Watchtower will auto-pull within 30s on host"
+          echo "✅ Pushed ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-dashboard:latest"
+          echo "Watchtower will auto-pull within 30s on host (label-enable)"
 
   # Optional: SSH deploy to self-hosted runner / VPS
   deploy:

@@ -153,14 +153,17 @@ if [ "${ENABLE_GIT_SYNC:-0}" = "1" ]; then
     while true; do
       sleep "$INTERVAL"
       if [ -d /workspace/.git ]; then
-        if git fetch --quiet 2>&1 | grep -v "^$" ; then echo "[git-sync] fetch output"; fi
+        if ! git fetch --quiet 2>&1 | while read -r line; do [ -n "$line" ] && echo "[git-sync] $line"; done; then
+          echo "[git-sync] fetch failed, will retry"
+          continue
+        fi
         LOCAL=$(git rev-parse HEAD 2>/dev/null || echo "")
         REMOTE=$(git rev-parse @{u} 2>/dev/null || echo "")
         if [ -n "$REMOTE" ] && [ "$LOCAL" != "$REMOTE" ]; then
           echo "[git-sync] 🔄 $LOCAL -> $REMOTE, pulling..."
           if git pull --ff-only --quiet 2>&1 | while read -r l; do echo "[git-sync] $l"; done; then
             echo "[git-sync] ✅ pulled, code synced via volume (no rebuild needed for code-only changes)"
-            if git diff --name-only HEAD@{1} HEAD 2>/dev/null | grep -qiE "Dockerfile|docker-compose|docker-entrypoint"; then
+            if git diff --name-only HEAD@{1} HEAD 2>/dev/null | grep -qiE "Dockerfile|docker-compose|docker-entrypoint|requirements|package\.json"; then
               echo "[git-sync] ⚠️  Infra files changed — rebuild needed! Run on HOST: docker compose up -d --build"
               echo "[git-sync] Or enable watchtower for auto-rebuild (see docker-compose.yml)"
             fi

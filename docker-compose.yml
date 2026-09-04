@@ -3,6 +3,12 @@ services:
     build: .
     container_name: pi-personal-agent
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pi", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       # Watchtower + git-sync will auto-update this container
@@ -64,6 +70,12 @@ services:
     build: ./dashboard
     container_name: pi-dashboard
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3001/api/fleet"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     ports:
       - "3000:3001"
     volumes:
