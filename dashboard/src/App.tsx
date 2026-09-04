@@ -333,9 +333,10 @@ function Topbar({ tick, running = 0, waiting = 0, done = 0 }: { tick: number; ru
   );
 }
 
-function InputBar() {
+function InputBar({ onDispatch }: { onDispatch?: (agent: string, task: string) => void }) {
   const [val, setVal] = useState("");
   const [agent, setAgent] = useState("RESEARCHER");
+  const [sending, setSending] = useState(false);
 
   return (
     <div
@@ -353,16 +354,28 @@ function InputBar() {
         value={val}
         onChange={(e) => setVal(e.target.value)}
         placeholder="dispatch task to agent..."
+        disabled={sending}
         style={{
           background: "transparent",
           color: "#c8e6c8",
           fontFamily: "var(--font-mono)",
           caretColor: "#39ff6e",
+          opacity: sending ? 0.5 : 1,
         }}
-        className="flex-1 text-[11px] px-4 py-3 outline-none placeholder:text-[#3d5c3d] min-w-0"
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && val.trim()) {
+        className="flex-1 text-[11px] px-4 py-3 outline-none placeholder:text-[#3d5c3d] min-w-0 disabled:opacity-50"
+        onKeyDown={async (e) => {
+          if (e.key === "Enter" && val.trim() && !sending) {
+            const task = val.trim();
+            const ag = agent;
+            setSending(true);
+            try {
+              if (onDispatch) await onDispatch(ag, task);
+              else {
+                await fetch("/api/dispatch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent: ag.toLowerCase(), task})});
+              }
+            } catch {}
             setVal("");
+            setSending(false);
           }
         }}
       />
@@ -545,8 +558,19 @@ export default function App() {
             </div>
           </div>
 
-          {/* Input bar */}
-          <InputBar />
+          {/* Input bar — dispatches to fleet, logs appear in medium windows within 1-2s */}
+          <InputBar onDispatch={async (ag, task) => {
+            // optimistic: add a pending window immediately so user sees feedback
+            const tempId = `tmp-${Date.now()}`;
+            setWindows(prev => [{id: tempId, agent: ag.toUpperCase(), task, status: "running" as const, model: "muse-spark-1.2-free", tokens: 0, elapsed: 0, lines: [{ts: new Date().toLocaleTimeString('en-GB'), kind: "info" as const, text: `dispatching to ${ag}...`}]}, ...prev]);
+            try {
+              const r = await fetch("/api/dispatch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent: ag.toLowerCase(), task})});
+              const j = await r.json().catch(()=>({}));
+              if (!r.ok) throw new Error(j.error||"dispatch failed");
+            } catch(e:any) {
+              setWindows(prev => prev.map(w=>w.id===tempId ? {...w, status:"error" as const, lines:[{ts: new Date().toLocaleTimeString('en-GB'), kind:"err" as const, text: String(e.message||e)}]} : w));
+            }
+          }} />
         </div>
       </div>
       {/* Live fleet modal — same data as /subagents-fleet, real-time logs, steer/stop like fleet inspector */}
