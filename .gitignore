@@ -16,3 +16,16 @@ dashboard/node_modules/
 dashboard/dist/
 Dashboard CLI Design/node_modules/
 Dashboard CLI Design/dist/
+
+# UPDATE 2026-09-04: temp / local-only artifacts (pi-subagents docs hardening) — keep git status clean
+# root node_modules (had no ignore, showed as untracked dir)
+node_modules/
+# root package-lock is now tracked; ignore only nested caches
+node_modules/.cache/
+node_modules/.package-lock.json
+# ad-hoc runners / repros (replaced by tests/e2e/ui.spec.ts E2E-UI-21)
+test_ui_playwright.js
+query
+scripts/repro-modal-flicker.js
+# Figma scaffold copy — canonical UI is dashboard/ , Dashboard CLI Design/ is local design reference only
+Dashboard CLI Design/

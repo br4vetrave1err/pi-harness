@@ -1,0 +1,32 @@
+# Git
+.git
+.gitignore
+.github
+
+# Huge / host-only dirs that must not be sent as build context
+dashboard/node_modules
+dashboard/dist
+Dashboard CLI Design
+Dashboard CLI Design/node_modules
+Dashboard CLI Design/dist
+workspace
+node_modules
+npm-debug.log*
+*.log
+
+# .pi contains sessions (gigabytes) – exclude everything except what Dockerfile COPYs
+# Note: use .pi/* not .pi so negation can re-include subdirs
+.pi/*
+!.pi/agents
+!.pi/agents/**
+!.pi/prompts
+!.pi/prompts/**
+
+# Env / OS
+.env
+.env.local
+.DS_Store
+Thumbs.db
+
+# Keep context small – these are not needed for pi_agent image
+workflows/README.md
