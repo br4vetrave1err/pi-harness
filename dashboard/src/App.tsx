@@ -396,24 +396,52 @@ export default function App() {
   const [conversations, setConversations] = useState<any[]>(FALLBACK_CONVERSATIONS);
   const [windows, setWindows] = useState<AgentWindow[]>(FALLBACK_WINDOWS);
   const [modal, setModal] = useState<{cmd:string,dockerCmd:string,file?:string}|null>(null);
+  const [stats, setStats] = useState({totalTokens:"30,880", toolCalls:"41", tasksComplete:"1 / 4", uptime:"00:18:42"});
 
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
   }, []);
 
-  // Fetch real sessions + agents (falls back to mock if API not reachable)
+  // Fetch real sessions + agents + stats (falls back to mock if API not reachable) — synced to /subagents-fleet
   useEffect(() => {
     let cancelled = false;
     const fetchAll = async () => {
       try {
-        const [sRes, aRes] = await Promise.all([
+        const [sRes, aRes, stRes] = await Promise.all([
           fetch("/api/sessions").then(r=>r.ok?r.json():null).catch(()=>null),
-          fetch("/api/agents").then(r=>r.ok?r.json():null).catch(()=>null),
+          fetch("/api/fleet").then(r=>r.ok?r.json():null).then(j=>j?.fleet||j).catch(()=>null),
+          fetch("/api/session-stats").then(r=>r.ok?r.json():null).catch(()=>null),
         ]);
         if (cancelled) return;
         if (sRes && Array.isArray(sRes) && sRes.length) setConversations(sRes);
-        if (aRes && Array.isArray(aRes) && aRes.length) setWindows(aRes);
+        // fleet returns {fleet:[...]} or [...] directly
+        const fleetArr = aRes && Array.isArray(aRes) ? aRes : aRes?.fleet;
+        if (fleetArr && Array.isArray(fleetArr) && fleetArr.length) {
+          // map fleet to AgentWindow shape if needed
+          const mapped = fleetArr.map((f:any)=>({
+            id: f.id || f.runId?.slice(0,8),
+            agent: f.agent || f.rawAgent || "CODER",
+            task: f.task || f.runId,
+            status: f.status || f.fleetState,
+            model: f.model || "muse-spark-1.2-free",
+            tokens: f.tokens || 0,
+            elapsed: f.elapsed || 0,
+            lines: f.lines || [],
+            file: f.sessionFile,
+          }));
+          setWindows(mapped);
+        } else if (aRes && Array.isArray(aRes) && aRes.length) {
+          setWindows(aRes);
+        }
+        if (stRes && stRes.totalTokens) {
+          setStats({
+            totalTokens: typeof stRes.totalTokens === 'number' ? stRes.totalTokens.toLocaleString() : stRes.totalTokens,
+            toolCalls: String(stRes.toolCalls ?? stRes.toolCount ?? "41"),
+            tasksComplete: stRes.tasksComplete || "1 / 4",
+            uptime: stRes.uptime || "00:18:42",
+          });
+        }
       } catch {}
     };
     fetchAll();
@@ -490,10 +518,10 @@ export default function App() {
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {[
-                  { label: "total tokens", value: "30,880", color: "#39ff6e" },
-                  { label: "tool calls", value: "41", color: "#4da6ff" },
-                  { label: "tasks complete", value: "1 / 4", color: "#ffb547" },
-                  { label: "session uptime", value: "00:18:42", color: "#c8e6c8" },
+                  { label: "total tokens", value: stats.totalTokens, color: "#39ff6e" },
+                  { label: "tool calls", value: stats.toolCalls, color: "#4da6ff" },
+                  { label: "tasks complete", value: stats.tasksComplete, color: "#ffb547" },
+                  { label: "session uptime", value: stats.uptime, color: "#c8e6c8" },
                 ].map((s) => (
                   <div
                     key={s.label}
