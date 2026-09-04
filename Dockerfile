@@ -94,7 +94,8 @@ COPY .pi/agents/coder.md /workspace/.pi/agents/coder.md
 COPY slack_webhook.sh /tools/slack_webhook.sh
 COPY task_watcher.sh /tools/task_watcher.sh
 COPY docker-entrypoint.sh /tools/docker-entrypoint.sh
-RUN chmod +x /tools/slack_webhook.sh /tools/task_watcher.sh /tools/docker-entrypoint.sh
+COPY dashboard.sh /tools/dashboard.sh
+RUN chmod +x /tools/slack_webhook.sh /tools/task_watcher.sh /tools/docker-entrypoint.sh /tools/dashboard.sh
 
 # Helper: always attach to main persistent pi session (stored at /root/.pi/agent/sessions, mounted to host)
 RUN printf '%s\n' '#!/bin/bash' \
@@ -105,20 +106,25 @@ RUN printf '%s\n' '#!/bin/bash' \
   'exec pi --session-id pi-personal-agent-main "$@"' \
   > /tools/pi-main && chmod +x /tools/pi-main && ln -sf /tools/pi-main /usr/local/bin/pi-main
 
-# Make `docker exec -it pi-personal-agent bash` auto-open pi main session
-# Disable with: docker exec -it -e PI_NO_AUTO=1 pi-personal-agent bash  OR  docker exec -it pi-personal-agent bash --noprofile
-RUN grep -q "pi-main auto-attach" /root/.bashrc 2>/dev/null || cat >> /root/.bashrc << 'BASHRC'
-# pi-main auto-attach: docker exec -it pi-personal-agent bash -> pi main session
-# bypass: PI_NO_AUTO=1 or PI_MANUAL_BASH=1 or `bash --noprofile`
+# Dashboard landing: docker exec -it pi-personal-agent bash -> CLI dashboard (1/4 sessions + 3/4 agent windows)
+# Left 1/4: previous conversations with agent tag, Middle 3/4: running agent medium windows → click lands in pi-vCLI
+# Bypass: PI_NO_AUTO=1 or bash --noprofile
+RUN cat > /root/.bashrc.pi-dashboard << 'BASHRC'
+# pi-dashboard auto-attach
 if [[ $- == *i* ]] && [ -t 0 ] && [ -z "$PI_NO_AUTO" ] && [ -z "$PI_MANUAL_BASH" ]; then
   if command -v pi >/dev/null 2>&1; then
-    # only auto-attach when no args were given to bash (i.e. plain `bash`)
     if [ $# -eq 0 ]; then
-      exec /tools/pi-main
+      if [ -x /tools/dashboard.sh ]; then
+        exec /tools/dashboard.sh
+      else
+        exec /tools/pi-main
+      fi
     fi
   fi
 fi
 BASHRC
+RUN grep -q "pi-dashboard" /root/.bashrc 2>/dev/null || cat /root/.bashrc.pi-dashboard >> /root/.bashrc
+RUN rm /root/.bashrc.pi-dashboard
 RUN sed -i 's/\r$//' /root/.bashrc 2>/dev/null || true
 
 # --- Detailed logging defaults (visible in `docker logs`) ---

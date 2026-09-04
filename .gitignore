@@ -11,3 +11,8 @@ __pycache__/
 !.pi/prompts/coder-tester-loop.md
 !workflows/
 !workflows/coder-tester-loop.js
+# dashboard
+dashboard/node_modules/
+dashboard/dist/
+Dashboard CLI Design/node_modules/
+Dashboard CLI Design/dist/

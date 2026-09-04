@@ -58,6 +58,24 @@ services:
       - DOCKER_API_VERSION=1.44
     profiles: ["watchtower", "auto-update"]  # run with: docker compose --profile auto-update up -d
 
+  # --- Dashboard UI (Figma React design integrated) ---
+  dashboard:
+    build: ./dashboard
+    container_name: pi-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:3001"
+    volumes:
+      - E:/projects/pi-harness/.pi:/root/.pi:ro
+      - E:/projects/pi-harness:/workspace:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - PORT=3001
+      - SESSIONS_DIR=/root/.pi/agent/sessions/--workspace--
+      - SUBAGENT_RUNS=/tmp/pi-subagents-uid-0/async-subagent-runs
+    depends_on:
+      - pi_agent
+
   # --- LIGHTWEIGHT ALTERNATIVE: pure git-sync (no registry, just git pull) ---
   git-sync:
     image: alpine/git:latest
