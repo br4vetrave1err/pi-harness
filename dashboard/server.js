@@ -264,7 +264,6 @@ app.get('/api/session/:id', (req, res) => {
 
 app.post('/api/open-session', (req, res) => {
   const { file, agentId, runId } = req.body;
-  // Prefer fleet sessionFile if agentId matches fleet
   let resolvedFile = file;
   if (!resolvedFile && agentId) {
     const fleet = readFleetStatus();
@@ -274,6 +273,59 @@ app.post('/api/open-session', (req, res) => {
   const cmd = resolvedFile ? `pi --session "${resolvedFile}"` : `pi --session-id pi-personal-agent-main`;
   const dockerCmd = resolvedFile ? `docker exec -it pi-personal-agent pi --session "${resolvedFile}"` : `docker exec -it pi-personal-agent pi --session-id pi-personal-agent-main`;
   res.json({ cmd, dockerCmd, file: resolvedFile, agentId, runId, sessionFile: resolvedFile });
+});
+
+// Fleet live actions (mirror /subagents-fleet: steer / stop)
+app.get('/api/fleet/:id', (req, res) => {
+  const fleet = readFleetStatus();
+  const hit = fleet.find(f=>f.id===req.params.id || f.runId===req.params.id || f.fullId===req.params.id);
+  if (!hit) return res.status(404).json({error:'not found', fleet: fleet.slice(0,3)});
+  // include full log tail (50 lines) for modal
+  let fullLines = hit.lines;
+  try {
+    const dir = hit.asyncDir;
+    const logs = fs.readdirSync(dir).filter(f=>f.startsWith('output-')).sort();
+    if (logs.length) {
+      const last = path.join(dir, logs[logs.length-1]);
+      const all = fs.readFileSync(last,'utf-8').split('\n').filter(Boolean).slice(-50);
+      fullLines = all.map(t=>({ts: new Date().toLocaleTimeString('en-GB'), kind: 'out', text: t.slice(0,140)}));
+    }
+  } catch {}
+  res.json({...hit, lines: fullLines});
+});
+
+app.post('/api/fleet/:id/steer', (req, res) => {
+  const { message, mode='follow_up' } = req.body;
+  const id = req.params.id;
+  if (!message) return res.status(400).json({error:'message required'});
+  // Write to supervisor channel so pi's subagent_supervisor can pick it up
+  // Fleet inspector does: runs.steer(key, message, {mode}) -> supervisor-channels/<runId>.json
+  try {
+    const fleet = readFleetStatus();
+    const hit = fleet.find(f=>f.id===id || f.runId===id || f.fullId===id);
+    if (!hit) return res.status(404).json({error:'fleet run not found'});
+    const chanDir = '/tmp/pi-subagents-uid-0/supervisor-channels';
+    if (!fs.existsSync(chanDir)) fs.mkdirSync(chanDir, {recursive:true});
+    const payload = { runId: hit.runId, mode, message, ts: Date.now(), from: 'dashboard' };
+    const out = path.join(chanDir, `${hit.runId}.steer.json`);
+    fs.writeFileSync(out, JSON.stringify(payload,null,2));
+    console.log(`[dashboard-api] steer ${hit.runId} mode=${mode} msg=${message.slice(0,80)}`);
+    return res.json({status:'queued', runId: hit.runId, mode, message, note:'written to supervisor-channels, pi-subagents will deliver if child is live (same as subagent_supervisor send)' });
+  } catch(e){ return res.status(500).json({error:String(e)}); }
+});
+
+app.post('/api/fleet/:id/stop', (req, res) => {
+  const id = req.params.id;
+  try {
+    const fleet = readFleetStatus();
+    const hit = fleet.find(f=>f.id===id || f.runId===id || f.fullId===id);
+    if (!hit) return res.status(404).json({error:'not found'});
+    // Touch a stop marker; pi-subagents will handle via subagent({action:"stop"})
+    const stopFile = path.join(hit.asyncDir, 'stop.requested');
+    fs.writeFileSync(stopFile, JSON.stringify({ts:Date.now(), from:'dashboard'},null,2));
+    console.log(`[dashboard-api] stop requested ${hit.runId}`);
+    return res.json({status:'stop_queued', runId: hit.runId, note:'stop.requested written — use subagent({action:"stop", id:"'+hit.runId+'"}) for authoritative stop or /subagents-fleet D'});
+  } catch(e){ return res.status(500).json({error:String(e)}); }
 });
 
 if (fs.existsSync(DIST)) {

@@ -247,10 +247,13 @@ open_agent() {
   fi
 }
 
-# Main loop
+# Main loop — 1s auto-refresh for real-time logs (like fleet inspector)
 while true; do
   draw_dashboard
-  read -r choice
+  if ! read -t 1 -r choice; then
+    # timeout → refresh for live logs
+    continue
+  fi
   case "$choice" in
     q|Q|exit|quit) echo "Bye — dropping to bash"; exec bash ;;
     r|R) continue ;;

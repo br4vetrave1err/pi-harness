@@ -395,7 +395,9 @@ export default function App() {
   const [tick, setTick] = useState(0);
   const [conversations, setConversations] = useState<any[]>(FALLBACK_CONVERSATIONS);
   const [windows, setWindows] = useState<AgentWindow[]>(FALLBACK_WINDOWS);
-  const [modal, setModal] = useState<{cmd:string,dockerCmd:string,file?:string}|null>(null);
+  const [modalAgentId, setModalAgentId] = useState<string | null>(null);
+  const [steerMsg, setSteerMsg] = useState("");
+  const [steerMode, setSteerMode] = useState<"steer"|"follow_up"|"auto">("follow_up");
   const [stats, setStats] = useState({totalTokens:"30,880", toolCalls:"41", tasksComplete:"1 / 4", uptime:"00:18:42"});
 
   useEffect(() => {
@@ -403,7 +405,7 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // Fetch real sessions + agents + stats (falls back to mock if API not reachable) — synced to /subagents-fleet
+  // Fetch real sessions + fleet + stats (falls back to mock) — synced to /subagents-fleet, 1s poll for real-time
   useEffect(() => {
     let cancelled = false;
     const fetchAll = async () => {
@@ -415,12 +417,11 @@ export default function App() {
         ]);
         if (cancelled) return;
         if (sRes && Array.isArray(sRes) && sRes.length) setConversations(sRes);
-        // fleet returns {fleet:[...]} or [...] directly
         const fleetArr = aRes && Array.isArray(aRes) ? aRes : aRes?.fleet;
         if (fleetArr && Array.isArray(fleetArr) && fleetArr.length) {
-          // map fleet to AgentWindow shape if needed
           const mapped = fleetArr.map((f:any)=>({
             id: f.id || f.runId?.slice(0,8),
+            runId: f.runId || f.fullId || f.id,
             agent: f.agent || f.rawAgent || "CODER",
             task: f.task || f.runId,
             status: f.status || f.fleetState,
@@ -429,6 +430,8 @@ export default function App() {
             elapsed: f.elapsed || 0,
             lines: f.lines || [],
             file: f.sessionFile,
+            sessionFile: f.sessionFile,
+            toolCount: f.toolCount,
           }));
           setWindows(mapped);
         } else if (aRes && Array.isArray(aRes) && aRes.length) {
@@ -445,7 +448,7 @@ export default function App() {
       } catch {}
     };
     fetchAll();
-    const iv = setInterval(fetchAll, 3000);
+    const iv = setInterval(fetchAll, 1000); // 1s for real-time logs
     return () => { cancelled = true; clearInterval(iv); };
   }, []);
 
@@ -453,24 +456,26 @@ export default function App() {
     setSelected(id);
     const conv = conversations.find(c=>c.id===id);
     if (!conv?.file) return;
+    // open live fleet modal for this session if it has a fleet child, else just show pi-vCLI cmd
+    const fleetHit = (windows as any).find((w:any)=>w.sessionFile===conv.file || w.file===conv.file);
+    if (fleetHit) { setModalAgentId(fleetHit.id); setActiveWin(fleetHit.id); return; }
     try {
       const r = await fetch("/api/open-session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({file:conv.file})});
       const j = await r.json();
-      setModal(j);
-      // also land in pi-vCLI if running inside container dashboard can exec - for web, show modal with command
+      // for sessions without fleet, show static modal via dedicated state
+      (window as any).__staticModal = j;
+      setModalAgentId(`__session_${id}`);
     } catch {}
   };
 
-  const handleClickWindow = async (win: AgentWindow) => {
+  const handleClickWindow = (win: AgentWindow) => {
     setActiveWin(win.id);
-    try {
-      const r = await fetch("/api/open-session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agentId:win.id, file:(win as any).file})});
-      const j = await r.json();
-      setModal(j);
-    } catch {
-      setModal({cmd:`pi --session ${win.id}`, dockerCmd:`docker exec -it pi-personal-agent pi --session ${win.id}`});
-    }
+    setModalAgentId(win.id);
   };
+
+  const modalWin = modalAgentId ? ((windows as any).find((w:any)=>w.id===modalAgentId) || (modalAgentId.startsWith('__session_') ? {id:modalAgentId, agent:'SESSION', task:'', status:'done', model:'', tokens:0, elapsed:0, lines:[], file: conversations.find(c=>c.id===parseInt(modalAgentId.replace('__session_','')))?.file} as any : null)) : null;
+  const modalCmd = modalWin?.file || modalWin?.sessionFile ? `pi --session "${modalWin.file||modalWin.sessionFile}"` : modalWin ? `pi --session ${modalWin.id}` : "";
+  const modalDockerCmd = modalWin?.file || modalWin?.sessionFile ? `docker exec -it pi-personal-agent pi --session "${modalWin.file||modalWin.sessionFile}"` : modalWin ? `docker exec -it pi-personal-agent pi --session ${modalWin.id}` : "";
 
   const runningCount = windows.filter((w: any) => w.status === "running").length;
   const waitingCount = windows.filter((w: any) => w.status === "waiting").length;
@@ -544,23 +549,55 @@ export default function App() {
           <InputBar />
         </div>
       </div>
-      {/* pi-vCLI modal — shown when clicking left session or middle agent window */}
-      {modal && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setModal(null)}>
-          <div onClick={e=>e.stopPropagation()} style={{borderColor:"#39ff6e"}} className="bg-[#0d100d] border rounded-sm max-w-[560px] w-full p-4">
-            <div className="text-[10px] text-[#39ff6e] tracking-widest mb-2">LAND IN pi-vCLI</div>
-            <div className="text-[11px] text-[#c8e6c8] mb-3">Click copies the command — run in your terminal to attach to that session/window.</div>
-            <div style={{borderColor:"#1e2b1e"}} className="border bg-[#0a0c0a] p-3 rounded-sm space-y-2">
-              <div className="text-[9px] text-[#3d5c3d] uppercase">pi command</div>
-              <code className="text-[11px] text-[#4da6ff] break-all">{modal.cmd}</code>
-              <div className="text-[9px] text-[#3d5c3d] uppercase mt-2">docker</div>
-              <code className="text-[11px] text-[#ffb547] break-all">{modal.dockerCmd}</code>
+      {/* Live fleet modal — same data as /subagents-fleet, real-time logs, steer/stop like fleet inspector */}
+      {modalAgentId && modalWin && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setModalAgentId(null)}>
+          <div onClick={e=>e.stopPropagation()} style={{borderColor: AGENT_COLORS[modalWin.agent] || "#39ff6e"}} className="bg-[#0d100d] border rounded-sm max-w-[720px] w-full max-h-[85vh] flex flex-col overflow-hidden">
+            {/* modal header */}
+            <div style={{borderBottomColor: AGENT_COLORS[modalWin.agent] || "#39ff6e", backgroundColor: (AGENT_COLORS[modalWin.agent]||"#39ff6e")+"0d"}} className="flex items-center justify-between px-4 py-3 border-b shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <span style={{color: AGENT_COLORS[modalWin.agent]||"#39ff6e"}} className="text-[11px] font-bold tracking-widest">[{modalWin.agent}]</span>
+                <span className="text-[11px] text-[#c8e6c8] truncate">{modalWin.task}</span>
+                <StatusDot status={modalWin.status as any} />
+              </div>
+              <button onClick={()=>setModalAgentId(null)} className="text-[#3d5c3d] hover:text-[#c8e6c8] text-[12px] px-2">✕</button>
             </div>
-            <div className="flex gap-2 mt-4">
-              <button onClick={()=>{navigator.clipboard.writeText(modal.dockerCmd);}} style={{borderColor:"#39ff6e", color:"#39ff6e"}} className="flex-1 border text-[10px] py-2 rounded-sm hover:bg-[#39ff6e14]">Copy docker cmd</button>
-              <button onClick={()=>setModal(null)} style={{borderColor:"#1e2b1e", color:"#6b9b6b"}} className="flex-1 border text-[10px] py-2 rounded-sm hover:bg-[#1e2b1e]">Close</button>
+            {/* live log — same as fleet inspector transcript, polls every 1s via parent fetch */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-1 bg-[#0a0c0a] min-h-[180px] max-h-[320px]">
+              <div className="text-[9px] text-[#3d5c3d] tracking-widest uppercase mb-2 flex justify-between">
+                <span>live log — synced to /subagents-fleet (status.json + output-*.log)</span>
+                <span className="text-[#39ff6e] animate-pulse">● live {modalWin.elapsed}s</span>
+              </div>
+              {(modalWin.lines && modalWin.lines.length ? modalWin.lines : [{ts:"--",kind:"info" as const,text:"waiting for logs..."}]).map((l:any,i:number)=>(
+                <div key={i} className="flex gap-2 text-[10px] leading-relaxed">
+                  <span style={{color:"#3d5c3d"}} className="shrink-0 tabular-nums">{l.ts}</span>
+                  <span style={{color: l.kind==="err"?"#ff4d4d": l.kind==="tool"?"#ffb547": l.kind==="info"?"#4da6ff":"#6b9b6b"}} className="break-all">{l.text}</span>
+                </div>
+              ))}
+              {modalWin.status==="running" && <div className="flex gap-2 text-[10px] mt-2"><span style={{color:"#3d5c3d"}}>{new Date().toLocaleTimeString("en-GB")}</span><span style={{color: AGENT_COLORS[modalWin.agent]||"#39ff6e"}} className="cursor-blink">▋</span></div>}
             </div>
-            <div className="text-[9px] text-[#3d5c3d] mt-3">Middle 3/4 windows → pi-vCLI: select any medium window to land in that agent’s session.</div>
+            {/* fleet actions like /subagents-fleet: steer / stop / transcript */}
+            <div style={{borderTopColor:"#1e2b1e"}} className="border-t bg-[#0a0c0a] p-3 space-y-3 shrink-0">
+              <div className="flex gap-2">
+                <input value={steerMsg} onChange={e=>setSteerMsg(e.target.value)} placeholder="steer / follow_up message to live agent..." className="flex-1 bg-[#111411] border border-[#1e2b1e] text-[11px] text-[#c8e6c8] px-3 py-2 rounded-sm outline-none placeholder:text-[#3d5c3d]" onKeyDown={e=>{if(e.key==="Enter" && steerMsg.trim()){fetch(`/api/fleet/${modalWin.runId||modalWin.id}/steer`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:steerMsg, mode:steerMode})}); setSteerMsg("");}}} />
+                <select value={steerMode} onChange={e=>setSteerMode(e.target.value as any)} className="bg-[#111411] border border-[#1e2b1e] text-[9px] text-[#6b9b6b] px-2 rounded-sm">
+                  <option value="follow_up">follow_up</option><option value="steer">steer</option><option value="auto">auto</option>
+                </select>
+                <button onClick={()=>{if(!steerMsg.trim()) return; fetch(`/api/fleet/${modalWin.runId||modalWin.id}/steer`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:steerMsg, mode:steerMode})}); setSteerMsg("");}} style={{backgroundColor: AGENT_COLORS[modalWin.agent]||"#39ff6e", color:"#0a0c0a"}} className="px-4 py-2 text-[10px] font-bold rounded-sm">Send</button>
+              </div>
+              <div className="flex gap-2 text-[9px]">
+                <button onClick={()=>{fetch(`/api/fleet/${modalWin.runId||modalWin.id}/stop`,{method:"POST"});}} style={{borderColor:"#ff4d4d", color:"#ff4d4d"}} className="flex-1 border py-2 rounded-sm hover:bg-[#ff4d4d14]">Stop (D)</button>
+                <button onClick={()=>{navigator.clipboard.writeText(modalDockerCmd);}} style={{borderColor:"#1e2b1e", color:"#6b9b6b"}} className="flex-1 border py-2 rounded-sm hover:bg-[#1e2b1e]">Copy pi-vCLI</button>
+                <button onClick={()=>setModalAgentId(null)} style={{borderColor:"#1e2b1e", color:"#3d5c3d"}} className="flex-1 border py-2 rounded-sm">Close</button>
+              </div>
+              <div style={{borderColor:"#1e2b1e"}} className="border bg-[#0a0c0a] p-2 rounded-sm">
+                <div className="text-[9px] text-[#3d5c3d] uppercase">land in pi-vCLI (same session as fleet)</div>
+                <code className="text-[10px] text-[#4da6ff] break-all">{modalCmd}</code>
+                <div className="text-[9px] text-[#3d5c3d] uppercase mt-1">docker</div>
+                <code className="text-[10px] text-[#ffb547] break-all">{modalDockerCmd}</code>
+              </div>
+              <div className="text-[9px] text-[#3d5c3d]">Fleet: {modalWin.model} · {modalWin.tokens} tok · {modalWin.elapsed}s · {modalWin.status} — updates every 1s from status.json + output-*.log</div>
+            </div>
           </div>
         </div>
       )}
