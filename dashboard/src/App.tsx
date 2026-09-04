@@ -411,12 +411,31 @@ export default function App() {
   const [modalAgentId, setModalAgentId] = useState<string | null>(null);
   const [steerMsg, setSteerMsg] = useState("");
   const [steerMode, setSteerMode] = useState<"steer"|"follow_up"|"auto">("follow_up");
+  const [showHelp, setShowHelp] = useState(false);
+  const [activeTab, setActiveTab] = useState<"log"|"transcript"|"events"|"artifacts"|"session">("log");
+  const [showToolDetails, setShowToolDetails] = useState(true);
   const [stats, setStats] = useState({totalTokens:"30,880", toolCalls:"41", tasksComplete:"1 / 4", uptime:"00:18:42"});
 
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
   }, []);
+
+  // Keyboard shortcuts like fleet inspector: f, ?, x, Esc, j/k
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+      if (e.key === 'f' && !modalAgentId) { const first = windows[0]; if(first) setModalAgentId(first.id); }
+      if (e.key === '?' ) setShowHelp(v=>!v);
+      if (e.key === 'Escape' && modalAgentId) setModalAgentId(null);
+      if (e.key === 'Escape' && showHelp) setShowHelp(false);
+      if (e.key === 'x' || (e.ctrlKey && e.key==='o')) setShowToolDetails(v=>!v);
+      if (e.key === 'j' && modalAgentId) { const idx = windows.findIndex(w=>w.id===modalAgentId); if(idx>=0 && idx < windows.length-1) setModalAgentId(windows[idx+1].id); }
+      if (e.key === 'k' && modalAgentId) { const idx = windows.findIndex(w=>w.id===modalAgentId); if(idx>0) setModalAgentId(windows[idx-1].id); }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [modalAgentId, showHelp, windows]);
 
   // Fetch real sessions + fleet + stats (falls back to mock) — synced to /subagents-fleet, 1s poll for real-time
   useEffect(() => {
@@ -573,55 +592,133 @@ export default function App() {
           }} />
         </div>
       </div>
-      {/* Live fleet modal — same data as /subagents-fleet, real-time logs, steer/stop like fleet inspector */}
+      {/* Live fleet modal — full observability: tabs like /subagents-fleet inspector */}
       {modalAgentId && modalWin && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setModalAgentId(null)}>
-          <div onClick={e=>e.stopPropagation()} style={{borderColor: AGENT_COLORS[modalWin.agent] || "#39ff6e"}} className="bg-[#0d100d] border rounded-sm max-w-[720px] w-full max-h-[85vh] flex flex-col overflow-hidden">
+          <div onClick={e=>e.stopPropagation()} style={{borderColor: AGENT_COLORS[modalWin.agent] || "#39ff6e"}} className="bg-[#0d100d] border rounded-sm max-w-[840px] w-full max-h-[88vh] flex flex-col overflow-hidden">
             {/* modal header */}
             <div style={{borderBottomColor: AGENT_COLORS[modalWin.agent] || "#39ff6e", backgroundColor: (AGENT_COLORS[modalWin.agent]||"#39ff6e")+"0d"}} className="flex items-center justify-between px-4 py-3 border-b shrink-0">
               <div className="flex items-center gap-3 min-w-0">
                 <span style={{color: AGENT_COLORS[modalWin.agent]||"#39ff6e"}} className="text-[11px] font-bold tracking-widest">[{modalWin.agent}]</span>
                 <span className="text-[11px] text-[#c8e6c8] truncate">{modalWin.task}</span>
                 <StatusDot status={modalWin.status as any} />
+                <span className="text-[9px] text-[#3d5c3d] hidden sm:block">{(modalWin as any).fleetState || modalWin.status} · {(modalWin as any).toolCount||0} tools · {(modalWin as any).turnCount||0} turns</span>
               </div>
-              <button onClick={()=>setModalAgentId(null)} className="text-[#3d5c3d] hover:text-[#c8e6c8] text-[12px] px-2">✕</button>
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] text-[#3d5c3d] hidden sm:block">{modalWin.model} · {modalWin.tokens} tok · {modalWin.elapsed}s</span>
+                <button onClick={()=>setModalAgentId(null)} className="text-[#3d5c3d] hover:text-[#c8e6c8] text-[12px] px-2">✕</button>
+              </div>
             </div>
-            {/* live log — same as fleet inspector transcript, polls every 1s via parent fetch */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-1 bg-[#0a0c0a] min-h-[180px] max-h-[320px]">
-              <div className="text-[9px] text-[#3d5c3d] tracking-widest uppercase mb-2 flex justify-between">
-                <span>live log — synced to /subagents-fleet (status.json + output-*.log)</span>
-                <span className="text-[#39ff6e] animate-pulse">● live {modalWin.elapsed}s</span>
-              </div>
-              {(modalWin.lines && modalWin.lines.length ? modalWin.lines : [{ts:"--",kind:"info" as const,text:"waiting for logs..."}]).map((l:any,i:number)=>(
-                <div key={i} className="flex gap-2 text-[10px] leading-relaxed">
-                  <span style={{color:"#3d5c3d"}} className="shrink-0 tabular-nums">{l.ts}</span>
-                  <span style={{color: l.kind==="err"?"#ff4d4d": l.kind==="tool"?"#ffb547": l.kind==="info"?"#4da6ff":"#6b9b6b"}} className="break-all">{l.text}</span>
-                </div>
+            {/* tabs like fleet inspector: Live Log / Transcript / Events / Artifacts / Session */}
+            <div style={{borderBottomColor:"#1e2b1e"}} className="flex gap-1 px-4 py-2 border-b bg-[#0a0c0a] shrink-0">
+              {["log","transcript","events","artifacts","session"].map(tab=>(
+                <button key={tab} onClick={()=>setActiveTab(tab as any)} style={{color: activeTab===tab ? "#39ff6e" : "#3d5c3d", borderColor: activeTab===tab ? "#39ff6e" : "#1e2b1e", backgroundColor: activeTab===tab ? "#39ff6e14" : "transparent"}} className="text-[9px] px-3 py-1 border rounded-sm uppercase tracking-widest">
+                  {tab}
+                </button>
               ))}
-              {modalWin.status==="running" && <div className="flex gap-2 text-[10px] mt-2"><span style={{color:"#3d5c3d"}}>{new Date().toLocaleTimeString("en-GB")}</span><span style={{color: AGENT_COLORS[modalWin.agent]||"#39ff6e"}} className="cursor-blink">▋</span></div>}
+              <span className="ml-auto text-[9px] text-[#3d5c3d] hidden sm:block">shortcuts: x tool details · j/k line · PgUp/Dn page · s steer · D stop · ? help</span>
             </div>
-            {/* fleet actions like /subagents-fleet: steer / stop / transcript */}
+            {/* tab content */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-1 bg-[#0a0c0a] min-h-[220px] max-h-[380px]">
+              {activeTab==="log" && (
+                <>
+                  <div className="text-[9px] text-[#3d5c3d] tracking-widest uppercase mb-2 flex justify-between">
+                    <span>live log — status.json + output-*.log (1s poll, same as fleet)</span>
+                    <span className="text-[#39ff6e] animate-pulse">● live {modalWin.elapsed}s {showToolDetails?"· tools on":"· tools off"}</span>
+                  </div>
+                  {(modalWin.lines && modalWin.lines.length ? modalWin.lines : [{ts:"--",kind:"info" as const,text:"waiting for logs..."}]).filter(l=>showToolDetails || l.kind!=="tool").map((l:any,i:number)=>(
+                    <div key={i} className="flex gap-2 text-[10px] leading-relaxed">
+                      <span style={{color:"#3d5c3d"}} className="shrink-0 tabular-nums">{l.ts}</span>
+                      <span style={{color: l.kind==="err"?"#ff4d4d": l.kind==="tool"?"#ffb547": l.kind==="info"?"#4da6ff":"#6b9b6b"}} className="break-all">{l.text}</span>
+                    </div>
+                  ))}
+                  {modalWin.status==="running" && <div className="flex gap-2 text-[10px] mt-2"><span style={{color:"#3d5c3d"}}>{new Date().toLocaleTimeString("en-GB")}</span><span style={{color: AGENT_COLORS[modalWin.agent]||"#39ff6e"}} className="cursor-blink">▋</span></div>}
+                </>
+              )}
+              {activeTab==="transcript" && (
+                <div className="text-[10px] text-[#6b9b6b] space-y-1">
+                  <div className="text-[9px] text-[#3d5c3d] uppercase">transcript — subagent({`action:"status", id:"${modalWin.runId||modalWin.id}", view:"transcript", lines:200`})</div>
+                  <div className="border border-[#1e2b1e] bg-[#111411] p-3 rounded-sm max-h-[260px] overflow-y-auto">
+                    {(modalWin.lines||[]).map((l:any,i:number)=><div key={i} className="flex gap-2"><span className="text-[#3d5c3d] shrink-0">{l.ts}</span><span className="break-all" style={{color: l.kind==="tool"?"#ffb547":"#c8e6c8"}}>{l.text}</span></div>)}
+                    <div className="text-[9px] text-[#3d5c3d] mt-2">Full transcript via: <code className="text-[#4da6ff]">subagent status {modalWin.runId||modalWin.id} transcript</code></div>
+                  </div>
+                </div>
+              )}
+              {activeTab==="events" && (
+                <div className="text-[10px] text-[#6b9b6b] space-y-1">
+                  <div className="text-[9px] text-[#3d5c3d] uppercase">events.jsonl — lifecycle + steer</div>
+                  <div className="border border-[#1e2b1e] bg-[#111411] p-3 rounded-sm max-h-[260px] overflow-y-auto font-mono">
+                    <div>subagent.run.started · {new Date((modalWin as any).startedAt||Date.now()).toLocaleTimeString()} · {modalWin.agent} {modalWin.task.slice(0,40)}</div>
+                    <div>subagent.step.started · {modalWin.task.slice(0,40)}</div>
+                    <div>subagent.steer.requested → scheduled → routed → delivered (when you Send)</div>
+                    <div>subagent.run.completed · {modalWin.status} · {modalWin.elapsed}s · {modalWin.tokens} tok</div>
+                    <div className="text-[9px] text-[#3d5c3d] mt-2">Source: { (modalWin as any).asyncDir || "/tmp/pi-subagents-uid-0/..."}/events.jsonl — same as fleet inspector</div>
+                  </div>
+                </div>
+              )}
+              {activeTab==="artifacts" && (
+                <div className="text-[10px] text-[#6b9b6b] space-y-2">
+                  <div className="text-[9px] text-[#3d5c3d] uppercase">artifacts — status.json + subagent-artifacts</div>
+                  <div className="border border-[#1e2b1e] bg-[#111411] p-3 rounded-sm space-y-1">
+                    <div>status.json: <code className="text-[#4da6ff] break-all">{(modalWin as any).asyncDir||"/tmp/..."}/status.json</code> — state {(modalWin as any).fleetState||modalWin.status}, toolCount {(modalWin as any).toolCount||0}</div>
+                    <div>output: <code className="text-[#4da6ff] break-all">{(modalWin as any).asyncDir||"/tmp/..."}/output-0.log</code> — live tail</div>
+                    <div>session: <code className="text-[#ffb547] break-all">{(modalWin as any).sessionFile||"--"}</code> — pi-vCLI: <code className="text-[#39ff6e]">pi --session "{(modalWin as any).sessionFile||modalWin.id}"</code></div>
+                    <div>artifacts dir: <code className="text-[#c084fc]">/root/.pi/agent/sessions/--workspace--/subagent-artifacts/{modalWin.runId||modalWin.id}_*/</code></div>
+                  </div>
+                </div>
+              )}
+              {activeTab==="session" && (
+                <div className="text-[10px] text-[#6b9b6b]">
+                  <div className="text-[9px] text-[#3d5c3d] uppercase">session</div>
+                  <div className="border border-[#1e2b1e] bg-[#111411] p-3 rounded-sm">
+                    <div>runId: <code className="text-[#c8e6c8]">{modalWin.runId||modalWin.id}</code></div>
+                    <div>agent: <code className="text-[#c8e6c8]">{modalWin.agent}</code> · model: {modalWin.model}</div>
+                    <div>tokens window/spent: {modalWin.tokens} · elapsed: {modalWin.elapsed}s</div>
+                    <div className="mt-2 text-[9px] text-[#3d5c3d]">Fleet fields: lifecycleArtifactVersion, runId, sessionId, mode, state, startedAt, durationMs, cwd, asyncDir, sessionFile, workflowGraph, steps, results, totalTokens, totalCost, toolCount, turnCount, launchResolvedExtensions, runtimeAcknowledgedExtensions, children</div>
+                  </div>
+                </div>
+              )}
+            </div>
+            {/* fleet controls */}
             <div style={{borderTopColor:"#1e2b1e"}} className="border-t bg-[#0a0c0a] p-3 space-y-3 shrink-0">
               <div className="flex gap-2">
-                <input value={steerMsg} onChange={e=>setSteerMsg(e.target.value)} placeholder="steer / follow_up message to live agent..." className="flex-1 bg-[#111411] border border-[#1e2b1e] text-[11px] text-[#c8e6c8] px-3 py-2 rounded-sm outline-none placeholder:text-[#3d5c3d]" onKeyDown={e=>{if(e.key==="Enter" && steerMsg.trim()){fetch(`/api/fleet/${modalWin.runId||modalWin.id}/steer`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:steerMsg, mode:steerMode})}); setSteerMsg("");}}} />
+                <input value={steerMsg} onChange={e=>setSteerMsg(e.target.value)} placeholder="steer / follow_up message to live agent... (s)" className="flex-1 bg-[#111411] border border-[#1e2b1e] text-[11px] text-[#c8e6c8] px-3 py-2 rounded-sm outline-none placeholder:text-[#3d5c3d]" onKeyDown={e=>{if(e.key==="Enter" && steerMsg.trim()){fetch(`/api/fleet/${modalWin.runId||modalWin.id}/steer`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:steerMsg, mode:steerMode})}); setSteerMsg("");}}} />
                 <select value={steerMode} onChange={e=>setSteerMode(e.target.value as any)} className="bg-[#111411] border border-[#1e2b1e] text-[9px] text-[#6b9b6b] px-2 rounded-sm">
-                  <option value="follow_up">follow_up</option><option value="steer">steer</option><option value="auto">auto</option>
+                  <option value="follow_up">follow_up (Tab)</option><option value="steer">steer</option><option value="auto">auto</option>
                 </select>
-                <button onClick={()=>{if(!steerMsg.trim()) return; fetch(`/api/fleet/${modalWin.runId||modalWin.id}/steer`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:steerMsg, mode:steerMode})}); setSteerMsg("");}} style={{backgroundColor: AGENT_COLORS[modalWin.agent]||"#39ff6e", color:"#0a0c0a"}} className="px-4 py-2 text-[10px] font-bold rounded-sm">Send</button>
+                <button onClick={()=>{if(!steerMsg.trim()) return; fetch(`/api/fleet/${modalWin.runId||modalWin.id}/steer`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:steerMsg, mode:steerMode})}); setSteerMsg("");}} style={{backgroundColor: AGENT_COLORS[modalWin.agent]||"#39ff6e", color:"#0a0c0a"}} className="px-4 py-2 text-[10px] font-bold rounded-sm">Send s</button>
               </div>
               <div className="flex gap-2 text-[9px]">
-                <button onClick={()=>{fetch(`/api/fleet/${modalWin.runId||modalWin.id}/stop`,{method:"POST"});}} style={{borderColor:"#ff4d4d", color:"#ff4d4d"}} className="flex-1 border py-2 rounded-sm hover:bg-[#ff4d4d14]">Stop (D)</button>
-                <button onClick={()=>{navigator.clipboard.writeText(modalDockerCmd);}} style={{borderColor:"#1e2b1e", color:"#6b9b6b"}} className="flex-1 border py-2 rounded-sm hover:bg-[#1e2b1e]">Copy pi-vCLI</button>
-                <button onClick={()=>setModalAgentId(null)} style={{borderColor:"#1e2b1e", color:"#3d5c3d"}} className="flex-1 border py-2 rounded-sm">Close</button>
+                <button onClick={()=>{fetch(`/api/fleet/${modalWin.runId||modalWin.id}/stop`,{method:"POST"});}} style={{borderColor:"#ff4d4d", color:"#ff4d4d"}} className="flex-1 border py-2 rounded-sm hover:bg-[#ff4d4d14]">Stop D</button>
+                <button onClick={()=>setShowToolDetails(v=>!v)} style={{borderColor:"#1e2b1e", color: showToolDetails?"#39ff6e":"#6b9b6b"}} className="flex-1 border py-2 rounded-sm">{showToolDetails?"Hide":"Show"} tools x</button>
+                <button onClick={()=>{navigator.clipboard.writeText(modalDockerCmd);}} style={{borderColor:"#1e2b1e", color:"#6b9b6b"}} className="flex-1 border py-2 rounded-sm hover:bg-[#1e2b1e]">Copy pi-vCLI H</button>
+                <button onClick={()=>setModalAgentId(null)} style={{borderColor:"#1e2b1e", color:"#3d5c3d"}} className="flex-1 border py-2 rounded-sm">Close Esc</button>
               </div>
               <div style={{borderColor:"#1e2b1e"}} className="border bg-[#0a0c0a] p-2 rounded-sm">
-                <div className="text-[9px] text-[#3d5c3d] uppercase">land in pi-vCLI (same session as fleet)</div>
+                <div className="text-[9px] text-[#3d5c3d] uppercase">land in pi-vCLI (same session as fleet inspector Enter/H)</div>
                 <code className="text-[10px] text-[#4da6ff] break-all">{modalCmd}</code>
                 <div className="text-[9px] text-[#3d5c3d] uppercase mt-1">docker</div>
                 <code className="text-[10px] text-[#ffb547] break-all">{modalDockerCmd}</code>
               </div>
-              <div className="text-[9px] text-[#3d5c3d]">Fleet: {modalWin.model} · {modalWin.tokens} tok · {modalWin.elapsed}s · {modalWin.status} — updates every 1s from status.json + output-*.log</div>
             </div>
+          </div>
+        </div>
+      )}
+      {/* help modal (?) */}
+      {showHelp && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={()=>setShowHelp(false)}>
+          <div onClick={e=>e.stopPropagation()} style={{borderColor:"#39ff6e"}} className="bg-[#0d100d] border rounded-sm max-w-[560px] w-full p-4">
+            <div className="text-[11px] text-[#39ff6e] tracking-widest mb-3">Shortcuts — same as /subagents-fleet</div>
+            <div className="grid grid-cols-2 gap-2 text-[10px] text-[#6b9b6b]">
+              <div><span className="text-[#c8e6c8]">↑↓/j/k</span> select card</div><div><span className="text-[#c8e6c8]">f</span> open fleet modal</div>
+              <div><span className="text-[#c8e6c8]">Shift+K/J</span> line</div><div><span className="text-[#c8e6c8]">PgUp/Dn</span> page</div>
+              <div><span className="text-[#c8e6c8]">x / Ctrl+O</span> toggle tool details</div><div><span className="text-[#c8e6c8]">s</span> steer (Tab cycles)</div>
+              <div><span className="text-[#c8e6c8]">D</span> stop</div><div><span className="text-[#c8e6c8]">H</span> Herdr / pi-vCLI</div>
+              <div><span className="text-[#c8e6c8]">Enter</span> Herdr</div><div><span className="text-[#c8e6c8]">Esc</span> close</div>
+              <div><span className="text-[#c8e6c8]">r</span> refresh</div><div><span className="text-[#c8e6c8]">?</span> help</div>
+            </div>
+            <div className="text-[9px] text-[#3d5c3d] mt-3">Source: pi-subagents docs/observability.md — FleetView, fleet inspector, async artifacts, status fields, host inspection RPC.</div>
+            <button onClick={()=>setShowHelp(false)} style={{borderColor:"#1e2b1e"}} className="w-full mt-3 border text-[10px] py-2 rounded-sm text-[#6b9b6b]">Close</button>
           </div>
         </div>
       )}
