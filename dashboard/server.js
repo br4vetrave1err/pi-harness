@@ -36,12 +36,26 @@ function readFleetStatus() {
         const raw = fs.readFileSync(statusFile, 'utf-8');
         const j = JSON.parse(raw);
         // Reconcile like fleet: state, lifecycle
-        const state = j.state || j.status || 'unknown';
+        let state = j.state || j.status || 'unknown';
         const agent = j.agent || j.steps?.[0]?.agent || j.workflowKey || 'coder';
         const task = j.task || j.steps?.[0]?.task || j.workflowGraph?.nodes?.[0]?.task || runId;
         const sessionFile = j.sessionFile || j.sessionId || null;
         const startedAt = j.startedAt || j.lastUpdate || 0;
-        const durationMs = j.durationMs || (Date.now() - startedAt) || 0;
+        const lastUpdate = j.lastUpdate || startedAt || 0;
+        let durationMs = j.durationMs;
+        // Stale detection: running but no heartbeat for >30s → treat as failed/orphaned (previous crash left it forever RUN)
+        const now = Date.now();
+        const STALE_MS = 30000;
+        if ((state === 'running' || state === 'pending') && lastUpdate && (now - lastUpdate > STALE_MS)) {
+          state = 'failed';
+          // freeze duration at last heartbeat instead of now - startedAt (prevents 616s growing elapsed)
+          durationMs = lastUpdate - startedAt;
+          if (durationMs < 0) durationMs = 0;
+        }
+        if (durationMs == null) {
+          durationMs = (state === 'running' || state === 'pending') ? (now - startedAt) : (lastUpdate - startedAt);
+        }
+        if (durationMs < 0) durationMs = 0;
         // totalTokens can be number or object {total, window, input, output}
         let totalTokens = 0;
         if (typeof j.totalTokens === 'object' && j.totalTokens !== null) totalTokens = j.totalTokens.total || j.totalTokens.window || j.totalTokens.input || 0;
@@ -188,12 +202,26 @@ app.get('/api/sessions', (req, res) => {
 // ---- API: fleet (canonical, mirrors /subagents-fleet) ----
 app.get('/api/fleet', (req, res) => {
   try {
-    const fleet = readFleetStatus();
+    const all = readFleetStatus();
+    const now = Date.now();
+    const showAll = req.query.all === 'true';
+    // Filter to active + recent completed/error (prevents stale DONE clutter like screenshot 4 windows)
+    // Keep running/waiting always; keep done/error only if updated within TTL
+    const ACTIVE_TTL = 60000; // error/failed visible 60s
+    const DONE_TTL = 30000; // done visible 30s (then auto-hide)
+    const fleet = showAll ? all : all.filter(f => {
+      if (f.status === 'running' || f.status === 'waiting') return true;
+      if (f.status === 'error' && (now - (f.lastUpdate || f.startedAt) < ACTIVE_TTL)) return true;
+      if (f.status === 'done' && (now - (f.lastUpdate || f.startedAt) < DONE_TTL)) return true;
+      return false;
+    });
     res.json({
       fleet,
       count: fleet.length,
+      total: all.length,
       timestamp: Date.now(),
       source: 'status.json + events.jsonl + output-*.log (same as subagent status fleet)',
+      filtered: !showAll,
     });
   } catch(e){ res.status(500).json({error:String(e)}); }
 });
@@ -201,7 +229,17 @@ app.get('/api/fleet', (req, res) => {
 // ---- API: agents (projection of fleet for medium windows) ----
 app.get('/api/agents', (req, res) => {
   try {
-    const fleet = readFleetStatus();
+    const all = readFleetStatus();
+    const now = Date.now();
+    const ACTIVE_TTL = 60000;
+    const DONE_TTL = 30000;
+    // Same filter as /api/fleet: only active + recent
+    const fleet = all.filter(f => {
+      if (f.status === 'running' || f.status === 'waiting') return true;
+      if (f.status === 'error' && (now - (f.lastUpdate || f.startedAt) < ACTIVE_TTL)) return true;
+      if (f.status === 'done' && (now - (f.lastUpdate || f.startedAt) < DONE_TTL)) return true;
+      return false;
+    });
     let agents = fleet.map(f => ({
       id: f.id,
       fullId: f.fullId,
@@ -219,10 +257,16 @@ app.get('/api/agents', (req, res) => {
       toolCount: f.toolCount,
     }));
     if (agents.length === 0) {
-      agents = [
-        { id:'w1', agent:'CODER', task:'implement rate-limiter middleware for Express', status:'running', model:'muse-spark-1.2-free', tokens:8340, elapsed:23, lines:[{ts:'14:53:18',kind:'cmd',text:"$ cat src/middleware/index.ts"},{ts:'14:53:19',kind:'tool',text:"  [Write] src/middleware/rateLimiter.ts"}], sessionFile:null },
-        { id:'w2', agent:'RESEARCHER', task:'scan codebase for deprecated API usages', status:'running', model:'muse-spark-1.2-free', tokens:14820, elapsed:47, lines:[{ts:'14:53:02',kind:'cmd',text:"$ find . -name '*.ts' | xargs grep -n 'fetch'"}], sessionFile:null },
-      ];
+      // No active agents — return empty so UI can show "no active agents" instead of stale DONE.
+      // Keep fallback only if explicitly requested via ?fallback=true (for demo)
+      if (req.query.fallback === 'true') {
+        agents = [
+          { id:'w1', agent:'CODER', task:'implement rate-limiter middleware for Express', status:'running', model:'muse-spark-1.2-free', tokens:8340, elapsed:23, lines:[{ts:'14:53:18',kind:'cmd',text:"$ cat src/middleware/index.ts"},{ts:'14:53:19',kind:'tool',text:"  [Write] src/middleware/rateLimiter.ts"}], sessionFile:null },
+          { id:'w2', agent:'RESEARCHER', task:'scan codebase for deprecated API usages', status:'running', model:'muse-spark-1.2-free', tokens:14820, elapsed:47, lines:[{ts:'14:53:02',kind:'cmd',text:"$ find . -name '*.ts' | xargs grep -n 'fetch'"}], sessionFile:null },
+        ];
+      } else {
+        agents = [];
+      }
     }
     res.json(agents);
   } catch(e){ res.status(500).json({error:String(e)}); }
@@ -251,25 +295,79 @@ app.get('/api/session-stats', (req, res) => {
 
 app.get('/api/session/:id', (req, res) => {
   try {
-    const file = path.join(SESSIONS_DIR, req.params.id);
+    const rawId = req.params.id;
+    const decoded = decodeURIComponent(rawId);
+    console.log(`[dashboard-api] session fetch ${decoded.slice(0,60)}`);
+    // Path traversal guard: only allow basename, no .. or / or \
+    const basename = path.basename(decoded);
+    if (decoded.includes('..') || decoded.includes('/') || decoded.includes('\\') || basename !== decoded) {
+      // Allow fallback search only by basename substring, not full path
+      if (decoded.includes('..')) {
+        console.warn(`[dashboard-api] traversal blocked ${decoded}`);
+        return res.status(400).json({error:'invalid id', id: decoded});
+      }
+    }
+    const file = path.join(SESSIONS_DIR, basename);
+    // Ensure normalized path stays within SESSIONS_DIR
+    const normalized = path.normalize(file);
+    if (!normalized.startsWith(path.normalize(SESSIONS_DIR))) {
+      console.warn(`[dashboard-api] traversal blocked normalized ${normalized}`);
+      return res.status(400).json({error:'invalid id'});
+    }
     let target = file;
     if (!fs.existsSync(target)) {
-      const files = fs.readdirSync(SESSIONS_DIR).filter(f=>f.includes(req.params.id));
+      // fallback: search by substring (handles encoded or partial ids) — only basename
+      const files = fs.readdirSync(SESSIONS_DIR).filter(f=>f.includes(basename) || f.includes(rawId));
       if (files.length) target = path.join(SESSIONS_DIR, files[0]);
-      else return res.status(404).json({error:'not found'});
+      else {
+        console.warn(`[dashboard-api] session not found ${decoded}`);
+        return res.status(404).json({error:'not found', id: decoded});
+      }
+    }
+    // Use async read with size limit to avoid blocking event loop on large sessions
+    const stat = fs.statSync(target);
+    if (stat.size > 5*1024*1024) {
+      res.setHeader('Content-Type','application/json');
+      return res.send(fs.readFileSync(target,'utf-8').slice(-500*1024));
     }
     res.setHeader('Content-Type','application/json');
     res.send(fs.readFileSync(target,'utf-8'));
-  } catch(e){ res.status(500).json({error:String(e)}); }
+  } catch(e){
+    console.error(`[dashboard-api] session error ${req.params.id}:`, String(e));
+    res.status(500).json({error:String(e)});
+  }
 });
 
 app.post('/api/dispatch', (req, res) => {
-  const { agent='coder', task='' } = req.body || {};
+  const { agent='coder', task='', mode='shell' } = req.body || {};
   if (!task || !String(task).trim()) return res.status(400).json({error:'task required'});
   const ag = String(agent).toLowerCase().trim() || 'coder';
   const cleanTask = String(task).slice(0, 2000);
-  console.log(`[dashboard-api] dispatch ${ag}: ${cleanTask.slice(0,120)}`);
+  const dispatchMode = String(mode).toLowerCase().trim() === 'pi' ? 'pi' : 'shell';
+  console.log(`[dashboard-api] dispatch ${ag} mode=${dispatchMode}: ${cleanTask.slice(0,120)}`);
   try {
+    // ---- PI MODE: real agent via pi-personal-agent (uses .pi/agents/coder.md per agents.md) ----
+    if (dispatchMode === 'pi') {
+      // Trigger real subagent in pi-personal-agent via docker exec (shared volume pi-subagents makes it visible)
+      try {
+        const piPrompt = `Use ${ag} to ${cleanTask}`;
+        // Use docker exec -d so it doesn't block dashboard
+        const dockerChild = spawn('docker', ['exec', '-d', 'pi-personal-agent', 'pi', '-p', piPrompt], {
+          detached: true,
+          stdio: 'ignore',
+        });
+        dockerChild.on('error', (err) => {
+          console.error(`[dashboard-api] docker pi dispatch failed: ${err.message}`);
+        });
+        dockerChild.unref();
+        console.log(`[dashboard-api] pi mode dispatched via docker exec pi-personal-agent: ${piPrompt.slice(0,80)}`);
+        return res.json({ queued:true, agent:ag, task: cleanTask, mode:'pi', note: 'dispatched to pi-personal-agent via docker exec; fleet appears via shared volume pi-subagents (1-2s poll)' });
+      } catch(e) {
+        console.error(`[dashboard-api] pi mode error, falling back to shell: ${String(e)}`);
+        // fall through to shell
+      }
+    }
+    // ---- SHELL MODE: fast local mock (original) ----
     // Create a fleet entry directly so dashboard's medium windows show live (same as /subagents-fleet)
     const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,6)}`;
     const dir = path.join(SUBAGENT_RUNS, runId);
@@ -283,25 +381,46 @@ app.post('/api/dispatch', (req, res) => {
       sessionFile: null, cwd: '/workspace', asyncDir: dir,
     };
     fs.writeFileSync(path.join(dir, 'status.json'), JSON.stringify(status, null, 2));
-    fs.writeFileSync(path.join(dir, 'events.jsonl'), JSON.stringify({type:'subagent.run.started', runId, agent:ag, task:cleanTask, ts: now})+'\n');
+    fs.writeFileSync(path.join(dir, 'events.jsonl'), JSON.stringify({type:'subagent.run.started', runId, agent:ag, task:cleanTask, ts: now, mode: dispatchMode})+'\n');
     const logFile = path.join(dir, 'output-0.log');
-    fs.writeFileSync(logFile, `[${new Date().toLocaleTimeString('en-GB')}] [${ag.toUpperCase()}] dispatching: ${cleanTask}\n`);
-    // Spawn actual work in background: try pi subagent, fallback to bash
+    fs.writeFileSync(logFile, `[${new Date().toLocaleTimeString('en-GB')}] [${ag.toUpperCase()}] dispatching (${dispatchMode}): ${cleanTask}\n`);
+    // Spawn actual work in background: try pi subagent, fallback to shell
+    // FIX: pi binary not present in dashboard container — previous unhandled 'error' event crashed server (ECONNREFUSED / dispatch failed)
     const runTask = async () => {
       try {
-        // Try to dispatch via pi subagent for real fleet integration
-        const child = spawn('pi', ['-p', `Use ${ag} to ${cleanTask}`], {
-          cwd: '/workspace',
-          detached: true,
-          stdio: 'ignore',
-          env: { ...process.env, PI_DASHBOARD: '1' },
-        });
-        child.unref();
-        // Also run a bash fallback that writes live logs to output-0.log for immediate visual feedback
-        const bash = spawn('bash', ['-c', `(echo "[dispatch] task: ${cleanTask.replace(/"/g,'\\"')}" ; sleep 1; echo "[tool] [${ag}] working..."; bash -c "${cleanTask.replace(/"/g,'\\"')}" 2>&1 | head -n 50; echo "[done] exit $?" ) | while IFS= read -r line; do echo "[$(date +%H:%M:%S)] $line" >> "${logFile}"; done; echo "completed" >> "${logFile}"`], {
-          cwd: '/workspace', detached: true, stdio: 'ignore',
-        });
-        bash.unref();
+        // Try to dispatch via pi subagent for real fleet integration (gracefully handle ENOENT) — only for shell mode's pi attempt
+        if (dispatchMode === 'shell') {
+          try {
+            const child = spawn('pi', ['-p', `Use ${ag} to ${cleanTask}`], {
+              cwd: '/workspace',
+              detached: true,
+              stdio: 'ignore',
+              env: { ...process.env, PI_DASHBOARD: '1' },
+            });
+            child.on('error', (err) => {
+              console.error(`[dashboard-api] pi spawn failed (ignored, using shell fallback): ${err.message}`);
+              try { fs.appendFileSync(logFile, `[warn] pi not available: ${err.message}\n`); } catch {}
+            });
+            child.unref();
+          } catch (e) {
+            console.error(`[dashboard-api] pi spawn sync error: ${String(e)}`);
+            try { fs.appendFileSync(logFile, `[warn] pi spawn error: ${String(e)}\n`); } catch {}
+          }
+        }
+        // Shell fallback that writes live logs to output-0.log for immediate visual feedback (Alpine has sh, not bash)
+        try {
+          const bash = spawn('sh', ['-c', `(echo "[dispatch] task: ${cleanTask.replace(/"/g,'\\"')}" ; sleep 1; echo "[tool] [${ag}] working..."; sh -c "${cleanTask.replace(/"/g,'\\"')}" 2>&1 | head -n 50; echo "[done] exit $?" ) | while IFS= read -r line; do echo "[$(date +%H:%M:%S)] $line" >> "${logFile}"; done; echo "completed" >> "${logFile}"`], {
+            cwd: '/workspace', detached: true, stdio: 'ignore',
+          });
+          bash.on('error', (err) => {
+            console.error(`[dashboard-api] shell spawn failed: ${err.message}`);
+            try { fs.appendFileSync(logFile, `[error] shell spawn: ${err.message}\n`); } catch {}
+          });
+          bash.unref();
+        } catch (e) {
+          console.error(`[dashboard-api] bash spawn sync error: ${String(e)}`);
+          try { fs.appendFileSync(logFile, `[error] bash spawn: ${String(e)}\n`); } catch {}
+        }
         // Update status to complete after 8s (or when pi finishes, fleet will overwrite)
         setTimeout(()=>{
           try {
@@ -311,10 +430,10 @@ app.post('/api/dispatch', (req, res) => {
             fs.appendFileSync(path.join(dir,'events.jsonl'), JSON.stringify({type:'subagent.run.completed', runId, ts: Date.now()})+'\n');
           } catch {}
         }, 8000);
-      } catch(e){ fs.appendFileSync(logFile, `[error] ${String(e)}\n`); }
+      } catch(e){ try { fs.appendFileSync(logFile, `[error] ${String(e)}\n`); } catch {} }
     };
     runTask();
-    return res.json({ queued:true, agent:ag, task: cleanTask, runId, note: 'fleet entry created, medium window will show live (poll /api/fleet every 1s)' });
+    return res.json({ queued:true, agent:ag, task: cleanTask, runId, mode: dispatchMode, note: dispatchMode==='pi' ? 'pi mode: dispatched via docker exec' : 'shell mode: fleet entry created, medium window will show live (poll /api/fleet every 1s)' });
   } catch(e){ return res.status(500).json({error:String(e)}); }
 });
 
@@ -331,23 +450,49 @@ app.post('/api/open-session', (req, res) => {
   res.json({ cmd, dockerCmd, file: resolvedFile, agentId, runId, sessionFile: resolvedFile });
 });
 
-// Fleet live actions (mirror /subagents-fleet: steer / stop)
+// Fleet live actions (mirror /subagents-fleet: steer / stop) — bounded to 64KB/200 msgs
 app.get('/api/fleet/:id', (req, res) => {
   const fleet = readFleetStatus();
   const hit = fleet.find(f=>f.id===req.params.id || f.runId===req.params.id || f.fullId===req.params.id);
   if (!hit) return res.status(404).json({error:'not found', fleet: fleet.slice(0,3)});
-  // include full log tail (50 lines) for modal
+  // Bounded transcript: ?lines=200 (max 200, 64KB)
+  const requestedLines = Math.min(Math.max(parseInt(String(req.query.lines || '50'), 10) || 50, 1), 200);
+  const MAX_BYTES = 64 * 1024;
   let fullLines = hit.lines;
+  let truncated = false;
+  let totalBytes = 0;
   try {
     const dir = hit.asyncDir;
     const logs = fs.readdirSync(dir).filter(f=>f.startsWith('output-')).sort();
     if (logs.length) {
       const last = path.join(dir, logs[logs.length-1]);
-      const all = fs.readFileSync(last,'utf-8').split('\n').filter(Boolean).slice(-50);
-      fullLines = all.map(t=>({ts: new Date().toLocaleTimeString('en-GB'), kind: 'out', text: t.slice(0,140)}));
+      const content = fs.readFileSync(last,'utf-8');
+      // Enforce 64KB bound
+      let slice = content;
+      if (Buffer.byteLength(content, 'utf-8') > MAX_BYTES) {
+        slice = content.slice(-MAX_BYTES);
+        truncated = true;
+      }
+      const allLines = slice.split('\n').filter(Boolean);
+      if (allLines.length > requestedLines) truncated = true;
+      const tail = allLines.slice(-requestedLines);
+      fullLines = tail.map(t=>({ts: new Date().toLocaleTimeString('en-GB'), kind: 'out', text: t.slice(0,140)}));
+      totalBytes = Buffer.byteLength(tail.join('\n'), 'utf-8');
     }
   } catch {}
-  res.json({...hit, lines: fullLines});
+  // Events capped 50 lines
+  let events = [];
+  try {
+    const evFile = path.join(hit.asyncDir, 'events.jsonl');
+    if (fs.existsSync(evFile)) {
+      const evContent = fs.readFileSync(evFile, 'utf-8');
+      const evLines = evContent.split('\n').filter(Boolean).slice(-50);
+      events = evLines.map(l => {
+        try { const e = JSON.parse(l); return { type: e.type || e.event || 'unknown', ts: e.ts || e.timestamp || Date.now(), raw: e }; } catch { return { type: 'raw', text: l.slice(0,120)}; }
+      });
+    }
+  } catch {}
+  res.json({...hit, lines: fullLines, transcript: { lines: fullLines, truncated, requestedLines, totalBytes, maxBytes: MAX_BYTES }, events, artifacts: { asyncDir: hit.asyncDir, sessionFile: hit.sessionFile }});
 });
 
 app.post('/api/fleet/:id/steer', (req, res) => {

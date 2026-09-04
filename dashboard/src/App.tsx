@@ -181,14 +181,19 @@ function Sidebar({
   selected,
   onSelect,
   conversations: convsProp,
+  isLoading,
 }: {
   selected: number | null;
   onSelect: (id: number) => void;
-  conversations?: any[];
+  conversations?: any[] | null;
+  isLoading?: boolean;
 }) {
   const [filter, setFilter] = useState<string | null>(null);
-  const convs = convsProp ?? FALLBACK_CONVERSATIONS;
+  // convsProp === null means still loading -> show empty until fetch resolves
+  // FALLBACK only used after fetch fails (App sets FALLBACK explicitly)
+  const convs = convsProp ?? [];
   const filtered = filter ? convs.filter((c) => c.tags.includes(filter)) : convs;
+  const loading = isLoading && convsProp === null;
 
   return (
     <div
@@ -235,7 +240,18 @@ function Sidebar({
 
       {/* Conversation list */}
       <div className="flex-1 overflow-y-auto scrollbar-hide">
-        {filtered.map((conv) => (
+        {loading ? (
+          // Skeleton while waiting for /api/sessions - prevents flash of FALLBACK
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="px-3 py-3 border-b border-b-[#0f180f] animate-pulse">
+              <div className="h-[10px] bg-[#1e2b1e] rounded-sm w-3/4 mb-2" />
+              <div className="h-[8px] bg-[#0f180f] rounded-sm w-1/2" />
+            </div>
+          ))
+        ) : filtered.length === 0 ? (
+          <div className="px-3 py-6 text-center text-[10px] text-[#3d5c3d]">no sessions</div>
+        ) : (
+          filtered.map((conv) => (
           <button
             key={conv.id}
             onClick={() => onSelect(conv.id)}
@@ -263,7 +279,8 @@ function Sidebar({
               <span className="text-[9px] text-[#3d5c3d]">{conv.messages} msgs</span>
             </div>
           </button>
-        ))}
+        ))
+        )}
       </div>
 
       {/* Sidebar footer */}
@@ -333,9 +350,10 @@ function Topbar({ tick, running = 0, waiting = 0, done = 0 }: { tick: number; ru
   );
 }
 
-function InputBar({ onDispatch }: { onDispatch?: (agent: string, task: string) => void }) {
+function InputBar({ onDispatch }: { onDispatch?: (agent: string, task: string, mode: string) => void }) {
   const [val, setVal] = useState("");
   const [agent, setAgent] = useState("RESEARCHER");
+  const [mode, setMode] = useState<"shell"|"pi">("shell");
   const [sending, setSending] = useState(false);
 
   return (
@@ -353,7 +371,7 @@ function InputBar({ onDispatch }: { onDispatch?: (agent: string, task: string) =
       <input
         value={val}
         onChange={(e) => setVal(e.target.value)}
-        placeholder="dispatch task to agent..."
+        placeholder={mode==='pi' ? "dispatch to pi agent (real subagent)..." : "dispatch task to agent... (shell)"}
         disabled={sending}
         style={{
           background: "transparent",
@@ -367,11 +385,12 @@ function InputBar({ onDispatch }: { onDispatch?: (agent: string, task: string) =
           if (e.key === "Enter" && val.trim() && !sending) {
             const task = val.trim();
             const ag = agent;
+            const m = mode;
             setSending(true);
             try {
-              if (onDispatch) await onDispatch(ag, task);
+              if (onDispatch) await onDispatch(ag, task, m);
               else {
-                await fetch("/api/dispatch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent: ag.toLowerCase(), task})});
+                await fetch("/api/dispatch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent: ag.toLowerCase(), task, mode: m})});
               }
             } catch {}
             setVal("");
@@ -383,6 +402,21 @@ function InputBar({ onDispatch }: { onDispatch?: (agent: string, task: string) =
         style={{ borderLeftColor: "#1e2b1e" }}
         className="flex items-center gap-2 px-4 border-l shrink-0"
       >
+        {/* 2-option toggle: SHELL (fast) vs PI (real agent per agents.md) */}
+        <div className="flex border border-[#1e2b1e] rounded-sm overflow-hidden mr-1">
+          <button
+            onClick={() => setMode("shell")}
+            style={{ backgroundColor: mode==="shell" ? "#39ff6e" : "transparent", color: mode==="shell" ? "#0a0c0a" : "#3d5c3d" }}
+            className="text-[8px] px-2 py-1 font-bold tracking-widest uppercase"
+            title="Shell: fast shell fallback, visible instantly in medium windows"
+          >SHELL</button>
+          <button
+            onClick={() => setMode("pi")}
+            style={{ backgroundColor: mode==="pi" ? "#4da6ff" : "transparent", color: mode==="pi" ? "#0a0c0a" : "#3d5c3d" }}
+            className="text-[8px] px-2 py-1 font-bold tracking-widest uppercase"
+            title="Pi: real subagent via pi-personal-agent (uses .pi/agents/*.md per agents.md), shared volume pi-subagents"
+          >PI</button>
+        </div>
         {AGENTS.map((a) => (
           <button
             key={a.id}
@@ -396,7 +430,7 @@ function InputBar({ onDispatch }: { onDispatch?: (agent: string, task: string) =
           </button>
         ))}
         <span style={{ color: "#1e2b1e" }} className="mx-1">│</span>
-        <span className="text-[9px] text-[#3d5c3d]">↵ send</span>
+        <span className="text-[9px] text-[#3d5c3d]">↵ send ({mode})</span>
       </div>
     </div>
   );
@@ -406,8 +440,11 @@ export default function App() {
   const [selected, setSelected] = useState<number | null>(null);
   const [activeWin, setActiveWin] = useState<string>("w1");
   const [tick, setTick] = useState(0);
-  const [conversations, setConversations] = useState<any[]>(FALLBACK_CONVERSATIONS);
-  const [windows, setWindows] = useState<AgentWindow[]>(FALLBACK_WINDOWS);
+  // FIX: null = not yet loaded, prevents flash of static FALLBACK on refresh.
+  // FALLBACK is only set after fetch fails (offline demo) - not on first render.
+  const [conversations, setConversations] = useState<any[] | null>(null);
+  const [windows, setWindows] = useState<AgentWindow[]>([]);
+  const [fleetLoaded, setFleetLoaded] = useState(false);
   const [modalAgentId, setModalAgentId] = useState<string | null>(null);
   const [steerMsg, setSteerMsg] = useState("");
   const [steerMode, setSteerMode] = useState<"steer"|"follow_up"|"auto">("follow_up");
@@ -415,6 +452,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"log"|"transcript"|"events"|"artifacts"|"session">("log");
   const [showToolDetails, setShowToolDetails] = useState(true);
   const [stats, setStats] = useState({totalTokens:"30,880", toolCalls:"41", tasksComplete:"1 / 4", uptime:"00:18:42"});
+  const [sessionLines, setSessionLines] = useState<any[]>([]);
+  const [sessionLoading, setSessionLoading] = useState(false);
 
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
@@ -437,7 +476,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', h);
   }, [modalAgentId, showHelp, windows]);
 
-  // Fetch real sessions + fleet + stats (falls back to mock) — synced to /subagents-fleet, 1s poll for real-time
+  // Fetch real sessions + fleet + stats — synced to /subagents-fleet, 1s poll for real-time. Fixed flash bug: initial FALLBACK_WINDOWS/FALLBACK_CONVERSATIONS caused static flash on refresh then replaced by dynamic.
   useEffect(() => {
     let cancelled = false;
     const fetchAll = async () => {
@@ -448,26 +487,49 @@ export default function App() {
           fetch("/api/session-stats").then(r=>r.ok?r.json():null).catch(()=>null),
         ]);
         if (cancelled) return;
-        if (sRes && Array.isArray(sRes) && sRes.length) setConversations(sRes);
+        // sRes === null => fetch failed/network error -> use FALLBACK for offline demo
+        // sRes === [] => backend reachable but no sessions -> show empty, NOT fallback
+        // Only FALLBACK on error keeps static from flashing on every refresh
+        if (Array.isArray(sRes)) {
+          setConversations(sRes);
+        } else if (sRes === null && conversations === null) {
+          // first load failed - show fallback instead of infinite skeleton
+          setConversations(FALLBACK_CONVERSATIONS);
+        } else if (sRes === null) {
+          // subsequent poll failed - keep previous dynamic data, don't revert to static
+        }
         const fleetArr = aRes && Array.isArray(aRes) ? aRes : aRes?.fleet;
-        if (fleetArr && Array.isArray(fleetArr) && fleetArr.length) {
-          const mapped = fleetArr.map((f:any)=>({
-            id: f.id || f.runId?.slice(0,8),
-            runId: f.runId || f.fullId || f.id,
-            agent: f.agent || f.rawAgent || "CODER",
-            task: f.task || f.runId,
-            status: f.status || f.fleetState,
-            model: f.model || "muse-spark-1.2-free",
-            tokens: f.tokens || 0,
-            elapsed: f.elapsed || 0,
-            lines: f.lines || [],
-            file: f.sessionFile,
-            sessionFile: f.sessionFile,
-            toolCount: f.toolCount,
-          }));
-          setWindows(mapped);
-        } else if (aRes && Array.isArray(aRes) && aRes.length) {
-          setWindows(aRes);
+        if (fleetArr && Array.isArray(fleetArr)) {
+          if (fleetArr.length) {
+            const mapped = fleetArr.map((f:any)=>({
+              id: f.id || f.runId?.slice(0,8),
+              runId: f.runId || f.fullId || f.id,
+              agent: f.agent || f.rawAgent || "CODER",
+              task: f.task || f.runId,
+              status: f.status || f.fleetState,
+              model: f.model || "muse-spark-1.2-free",
+              tokens: f.tokens || 0,
+              elapsed: f.elapsed || 0,
+              lines: f.lines || [],
+              file: f.sessionFile,
+              sessionFile: f.sessionFile,
+              toolCount: f.toolCount,
+            }));
+            // Medium windows = ACTIVE only (running/waiting). Don't show stale DONE like screenshot 4 windows.
+            // Backend already filters to active + recent (30s done, 60s error), frontend double-filters to running/waiting for strict active view.
+            const activeOnly = mapped.filter((w:any) => w.status === 'running' || w.status === 'waiting');
+            setWindows(activeOnly);
+          } else {
+            // Fleet empty → clear stale windows (prevents showing old DONE or fallback)
+            setWindows([]);
+          }
+        } else if (aRes && Array.isArray(aRes)) {
+          if (aRes.length) {
+            const activeOnly = (aRes as any[]).filter((w:any) => w.status === 'running' || w.status === 'waiting');
+            setWindows(activeOnly);
+          } else {
+            setWindows([]);
+          }
         }
         if (stRes && stRes.totalTokens) {
           setStats({
@@ -477,7 +539,9 @@ export default function App() {
             uptime: stRes.uptime || "00:18:42",
           });
         }
-      } catch {}
+      } catch {} finally {
+        if (!cancelled) setFleetLoaded(true);
+      }
     };
     fetchAll();
     const iv = setInterval(fetchAll, 1000); // 1s for real-time logs
@@ -486,7 +550,7 @@ export default function App() {
 
   const handleSelectSession = async (id: number) => {
     setSelected(id);
-    const conv = conversations.find(c=>c.id===id);
+    const conv = (conversations ?? []).find(c=>c.id===id);
     if (!conv?.file) return;
     // open live fleet modal for this session if it has a fleet child, else just show pi-vCLI cmd
     const fleetHit = (windows as any).find((w:any)=>w.sessionFile===conv.file || w.file===conv.file);
@@ -505,9 +569,67 @@ export default function App() {
     setModalAgentId(win.id);
   };
 
-  const modalWin = modalAgentId ? ((windows as any).find((w:any)=>w.id===modalAgentId) || (modalAgentId.startsWith('__session_') ? {id:modalAgentId, agent:'SESSION', task:'', status:'done', model:'', tokens:0, elapsed:0, lines:[], file: conversations.find(c=>c.id===parseInt(modalAgentId.replace('__session_','')))?.file} as any : null)) : null;
+  const sessForModal = modalAgentId?.startsWith('__session_') ? (conversations ?? []).find(c=>c.id===parseInt(modalAgentId.replace('__session_',''))) : null;
+  const modalWinRaw = modalAgentId ? ((windows as any).find((w:any)=>w.id===modalAgentId) || (modalAgentId.startsWith('__session_') ? {id:modalAgentId, agent: (sessForModal?.agent || sessForModal?.tags?.[0] || 'SESSION').toUpperCase(), task: sessForModal?.title || sessForModal?.preview || '', status:'done', model:'', tokens:0, elapsed:0, lines: sessionLines.length ? sessionLines : [], file: sessForModal?.file} as any : null)) : null;
+  const modalWin = modalWinRaw;
   const modalCmd = modalWin?.file || modalWin?.sessionFile ? `pi --session "${modalWin.file||modalWin.sessionFile}"` : modalWin ? `pi --session ${modalWin.id}` : "";
   const modalDockerCmd = modalWin?.file || modalWin?.sessionFile ? `docker exec -it pi-personal-agent pi --session "${modalWin.file||modalWin.sessionFile}"` : modalWin ? `docker exec -it pi-personal-agent pi --session ${modalWin.id}` : "";
+
+  // Fetch session transcript when opening left-panel session (which has no fleet lines) — fixes "waiting for logs..." bug + stuck loading
+  useEffect(() => {
+    if (!modalAgentId || !modalAgentId.startsWith('__session_')) {
+      if (sessionLines.length) setSessionLines([]);
+      if (sessionLoading) setSessionLoading(false);
+      return;
+    }
+    const file = (conversations ?? []).find(c=>c.id===parseInt(modalAgentId.replace('__session_','')))?.file;
+    if (!file) {
+      setSessionLines([{ts:'--',kind:'err',text:'session file not found in conversations'}]);
+      setSessionLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      setSessionLoading(true);
+      const id = encodeURIComponent(file.split('/').pop() || file);
+      const urls = [`/api/session/${id}`, `http://127.0.0.1:3001/api/session/${id}`];
+      let lastErr: any = null;
+      for (const url of urls) {
+        try {
+          const ctrl = new AbortController();
+          const to = setTimeout(()=>ctrl.abort(), 5000);
+          const r = await fetch(url, {signal: ctrl.signal});
+          clearTimeout(to);
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const txt = await r.text();
+          const lines = txt.split('\n').filter(Boolean).slice(-120).map((l:any, idx:number) => {
+            try {
+              const obj = JSON.parse(l);
+              const c = obj.message?.content?.[0];
+              const text = c?.text || c?.command || obj.toolName || obj.type || l.slice(0,120);
+              const kind = obj.message?.role === 'assistant' ? (c?.type==='toolCall' ? 'tool' : 'out') : obj.message?.role==='toolResult' ? (obj.isError?'err':'out') : obj.type==='tool_execution_start' ? 'tool' : obj.type==='session' ? 'info' : 'out';
+              const ts = obj.timestamp ? new Date(obj.timestamp).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : String(idx).padStart(2,'0')+':00:00';
+              return { ts, kind, text: String(text).slice(0,140) };
+            } catch { return { ts: '--', kind: 'out', text: l.slice(0,120) }; }
+          });
+          if (!cancelled) {
+            setSessionLines(lines.length ? lines : [{ts:'--',kind:'info',text:'(empty session)'}]);
+            setSessionLoading(false);
+          }
+          return;
+        } catch (e:any) {
+          lastErr = e;
+          console.warn(`[session fetch] ${url} failed:`, e.message);
+        }
+      }
+      if (!cancelled) {
+        setSessionLines([{ts:'--',kind:'err',text:`failed to load session: ${String(lastErr?.message||lastErr).slice(0,80)} (id ${id})`}]);
+        setSessionLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [modalAgentId, conversations]);
 
   const runningCount = windows.filter((w: any) => w.status === "running").length;
   const waitingCount = windows.filter((w: any) => w.status === "waiting").length;
@@ -519,7 +641,7 @@ export default function App() {
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Left sidebar — 1/4 */}
-        <Sidebar selected={selected} onSelect={handleSelectSession} conversations={conversations} />
+        <Sidebar selected={selected} onSelect={handleSelectSession} conversations={conversations} isLoading={!fleetLoaded} />
 
         {/* Main panel — 3/4 */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -534,16 +656,27 @@ export default function App() {
               <span className="text-[9px] text-[#3d5c3d]">{windows.length} windows</span>
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-              {windows.map((win) => (
-                <AgentWindowCard
-                  key={win.id}
-                  win={win}
-                  isActive={activeWin === win.id}
-                  onClick={() => handleClickWindow(win)}
-                />
-              ))}
-            </div>
+            {windows.length === 0 ? (
+              <div className="border border-dashed border-[#1e2b1e] bg-[#0d100d] rounded-sm p-6 text-center">
+                <div className="text-[11px] text-[#6b9b6b] tracking-widest">
+                  {fleetLoaded ? "No active agents — dispatch a task below (SHELL fast, PI real per agents.md)" : "Loading fleet..."}
+                </div>
+                <div className="text-[9px] text-[#3d5c3d] mt-2">
+                  {fleetLoaded ? "Select SHELL for shell echo or PI for real subagent (coder/tester/researcher)" : "Polling /api/fleet every 1s"}
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                {windows.map((win) => (
+                  <AgentWindowCard
+                    key={win.id}
+                    win={win}
+                    isActive={activeWin === win.id}
+                    onClick={() => handleClickWindow(win)}
+                  />
+                ))}
+              </div>
+            )}
 
             {/* Stats row */}
             <div className="mt-6 mb-2">
@@ -577,15 +710,17 @@ export default function App() {
             </div>
           </div>
 
-          {/* Input bar — dispatches to fleet, logs appear in medium windows within 1-2s */}
-          <InputBar onDispatch={async (ag, task) => {
+          {/* Input bar — 2 options: SHELL (fast sh) vs PI (real subagent via agents.md) */}
+          <InputBar onDispatch={async (ag, task, mode) => {
             // optimistic: add a pending window immediately so user sees feedback
             const tempId = `tmp-${Date.now()}`;
-            setWindows(prev => [{id: tempId, agent: ag.toUpperCase(), task, status: "running" as const, model: "muse-spark-1.2-free", tokens: 0, elapsed: 0, lines: [{ts: new Date().toLocaleTimeString('en-GB'), kind: "info" as const, text: `dispatching to ${ag}...`}]}, ...prev]);
+            setWindows(prev => [{id: tempId, agent: ag.toUpperCase(), task: `${task} [${mode}]`, status: "running" as const, model: "muse-spark-1.2-free", tokens: 0, elapsed: 0, lines: [{ts: new Date().toLocaleTimeString('en-GB'), kind: "info" as const, text: `dispatching to ${ag} via ${mode}...`}]}, ...prev]);
             try {
-              const r = await fetch("/api/dispatch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent: ag.toLowerCase(), task})});
+              const r = await fetch("/api/dispatch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent: ag.toLowerCase(), task, mode})});
               const j = await r.json().catch(()=>({}));
               if (!r.ok) throw new Error(j.error||"dispatch failed");
+              // Remove optimistic temp after real fleet appears (1s poll will replace); keep temp for 1s then let poll overwrite
+              setTimeout(()=> setWindows(prev => prev.filter(w=>w.id!==tempId)), 3000);
             } catch(e:any) {
               setWindows(prev => prev.map(w=>w.id===tempId ? {...w, status:"error" as const, lines:[{ts: new Date().toLocaleTimeString('en-GB'), kind:"err" as const, text: String(e.message||e)}]} : w));
             }
@@ -623,16 +758,16 @@ export default function App() {
               {activeTab==="log" && (
                 <>
                   <div className="text-[9px] text-[#3d5c3d] tracking-widest uppercase mb-2 flex justify-between">
-                    <span>live log — status.json + output-*.log (1s poll, same as fleet)</span>
-                    <span className="text-[#39ff6e] animate-pulse">● live {modalWin.elapsed}s {showToolDetails?"· tools on":"· tools off"}</span>
+                    <span>{String(modalWin.id).startsWith('__session_') ? `session transcript — ${modalWin.file?.split('/').pop() || modalWin.id}` : "live log — status.json + output-*.log (1s poll, same as fleet)"}</span>
+                    <span className="text-[#39ff6e] animate-pulse">● {String(modalWin.id).startsWith('__session_') ? (sessionLoading ? "loading..." : "loaded") : `live ${modalWin.elapsed}s`} {showToolDetails?"· tools on":"· tools off"}</span>
                   </div>
-                  {(modalWin.lines && modalWin.lines.length ? modalWin.lines : [{ts:"--",kind:"info" as const,text:"waiting for logs..."}]).filter(l=>showToolDetails || l.kind!=="tool").map((l:any,i:number)=>(
+                  {(String(modalWin.id).startsWith('__session_') && sessionLoading ? [{ts:"--",kind:"info" as const,text:"loading session..."}] : (modalWin.lines && modalWin.lines.length ? modalWin.lines : [{ts:"--",kind:"info" as const,text:"waiting for logs..."}])).filter((l:any)=>showToolDetails || l.kind!=="tool").map((l:any,i:number)=>(
                     <div key={i} className="flex gap-2 text-[10px] leading-relaxed">
                       <span style={{color:"#3d5c3d"}} className="shrink-0 tabular-nums">{l.ts}</span>
                       <span style={{color: l.kind==="err"?"#ff4d4d": l.kind==="tool"?"#ffb547": l.kind==="info"?"#4da6ff":"#6b9b6b"}} className="break-all">{l.text}</span>
                     </div>
                   ))}
-                  {modalWin.status==="running" && <div className="flex gap-2 text-[10px] mt-2"><span style={{color:"#3d5c3d"}}>{new Date().toLocaleTimeString("en-GB")}</span><span style={{color: AGENT_COLORS[modalWin.agent]||"#39ff6e"}} className="cursor-blink">▋</span></div>}
+                  {modalWin.status==="running" && !String(modalWin.id).startsWith('__session_') && <div className="flex gap-2 text-[10px] mt-2"><span style={{color:"#3d5c3d"}}>{new Date().toLocaleTimeString("en-GB")}</span><span style={{color: AGENT_COLORS[modalWin.agent]||"#39ff6e"}} className="cursor-blink">▋</span></div>}
                 </>
               )}
               {activeTab==="transcript" && (

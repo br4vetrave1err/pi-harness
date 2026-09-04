@@ -9,8 +9,8 @@ FROM node:22-alpine
 WORKDIR /app
 COPY --from=build /app/dist ./dist
 COPY server.js package.json ./
-# server.js is ESM, needs express
-RUN npm install express
+# server.js is ESM, needs express; docker-cli for Pi mode (docker exec pi-personal-agent)
+RUN apk add --no-cache docker-cli && npm install express
 ENV PORT=3001
 ENV SESSIONS_DIR=/root/.pi/agent/sessions/--workspace--
 ENV SUBAGENT_RUNS=/tmp/pi-subagents-uid-0/async-subagent-runs
