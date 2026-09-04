@@ -41,7 +41,11 @@ function readFleetStatus() {
         const sessionFile = j.sessionFile || j.sessionId || null;
         const startedAt = j.startedAt || j.lastUpdate || 0;
         const durationMs = j.durationMs || (Date.now() - startedAt) || 0;
-        const totalTokens = j.totalTokens || j.spent || 0;
+        // totalTokens can be number or object {total, window, input, output}
+        let totalTokens = 0;
+        if (typeof j.totalTokens === 'object' && j.totalTokens !== null) totalTokens = j.totalTokens.total || j.totalTokens.window || j.totalTokens.input || 0;
+        else totalTokens = j.totalTokens || j.spent || 0;
+        if (typeof totalTokens !== 'number') totalTokens = Number(totalTokens) || 0;
         const toolCount = j.toolCount || 0;
         const turnCount = j.turnCount || 0;
 
