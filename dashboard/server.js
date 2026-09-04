@@ -450,6 +450,52 @@ app.post('/api/open-session', (req, res) => {
   res.json({ cmd, dockerCmd, file: resolvedFile, agentId, runId, sessionFile: resolvedFile });
 });
 
+// SSE stream for fleet — must be BEFORE /:id route (Express matches in order)
+app.get('/api/fleet/stream', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  res.write('retry: 1000\n\n');
+  let lastHash = '';
+  const getHash = () => {
+    try {
+      const fleet = readFleetStatus();
+      return fleet.map(f=>`${f.runId}:${f.fleetState||f.state}:${f.lastUpdate||f.startedAt}`).join('|') + `|count:${fleet.length}`;
+    } catch { return ''; }
+  };
+  const sendIfChanged = () => {
+    const hash = getHash();
+    if (hash !== lastHash) {
+      lastHash = hash;
+      const fleet = readFleetStatus();
+      const now = Date.now();
+      res.write(`event: fleet\n`);
+      res.write(`data: ${JSON.stringify({ type: 'fleet:changed', timestamp: now, count: fleet.length, fleet: fleet.slice(0,5).map(f=>({runId:f.runId, state:f.fleetState||f.state})) })}\n\n`);
+    } else {
+      res.write(`: heartbeat ${Date.now()}\n\n`);
+    }
+  };
+  sendIfChanged();
+  const iv = setInterval(sendIfChanged, 500);
+  let watcher;
+  try {
+    if (fs.existsSync(SUBAGENT_RUNS)) {
+      watcher = fs.watch(SUBAGENT_RUNS, { recursive: false }, () => {
+        setTimeout(sendIfChanged, 100);
+      });
+    }
+  } catch {}
+  const cleanup = () => {
+    clearInterval(iv);
+    if (watcher) try { watcher.close(); } catch {}
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+});
+
 // Fleet live actions (mirror /subagents-fleet: steer / stop) — bounded to 64KB/200 msgs
 app.get('/api/fleet/:id', (req, res) => {
   const fleet = readFleetStatus();

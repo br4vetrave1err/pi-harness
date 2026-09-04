@@ -544,8 +544,25 @@ export default function App() {
       }
     };
     fetchAll();
-    const iv = setInterval(fetchAll, 1000); // 1s for real-time logs
-    return () => { cancelled = true; clearInterval(iv); };
+    const iv = setInterval(fetchAll, 1000); // 1s poll fallback
+    // SSE upgrade: sub-100ms fleet updates via /api/fleet/stream, fallback to poll if unavailable
+    let es: EventSource | null = null;
+    let sseActive = false;
+    try {
+      if (typeof window !== 'undefined' && 'EventSource' in window) {
+        es = new EventSource('/api/fleet/stream');
+        es.addEventListener('fleet', () => {
+          sseActive = true;
+          fetchAll();
+        });
+        es.onopen = () => { sseActive = true; };
+        es.onerror = () => {
+          // let browser auto-reconnect; keep 1s poll as fallback
+          sseActive = false;
+        };
+      }
+    } catch {}
+    return () => { cancelled = true; clearInterval(iv); if (es) try { es.close(); } catch {} };
   }, []);
 
   const handleSelectSession = async (id: number) => {
