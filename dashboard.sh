@@ -54,21 +54,96 @@ format_session_line() {
   printf " ${C_YELLOW}%2d${C_RESET} ${C_CYAN}[%-8s]${C_RESET} %s\n     ${C_DIM}%s${C_RESET}\n" "$idx" "$agent" "$ts" "$preview"
 }
 
+extract_tokens() {
+  local f="$1"
+  local tok=""
+  if command -v jq >/dev/null 2>&1; then
+    tok=$(jq -r '.totalTokens | if type=="object" then (.total // .window // .input // 0) elif type=="number" then . else 0 end' "$f" 2>/dev/null)
+  elif command -v python3 >/dev/null 2>&1; then
+    tok=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); t=d.get('totalTokens',0); print(t.get('total', t.get('window', t.get('input',0))) if isinstance(t,dict) else (t if isinstance(t,int) else 0))" "$f" 2>/dev/null)
+  fi
+  if [ -z "$tok" ] || [ "$tok" = "null" ]; then
+    tok=$(grep -o '"totalTokens"[[:space:]]*:[[:space:]]*[0-9]*' "$f" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
+    if [ -z "$tok" ]; then
+      # try object form: extract total or window
+      tok=$(grep -o '"totalTokens"[[:space:]]*:[[:space:]]*{[^}]*}' "$f" 2>/dev/null | grep -o '"total"[[:space:]]*:[[:space:]]*[0-9]*' | head -1 | cut -d: -f2 | tr -d ' ')
+      if [ -z "$tok" ]; then tok=$(grep -o '"totalTokens"[[:space:]]*:[[:space:]]*{[^}]*}' "$f" 2>/dev/null | grep -o '"window"[[:space:]]*:[[:space:]]*[0-9]*' | head -1 | cut -d: -f2 | tr -d ' '); fi
+    fi
+  fi
+  echo "${tok:-0}"
+}
+
+map_state() {
+  local s="$1"
+  case "$s" in
+    running|pending) echo "running" ;;
+    paused) echo "waiting" ;;
+    complete) echo "done" ;;
+    failed|stopped|error) echo "error" ;;
+    *) echo "$s" ;;
+  esac
+}
+
 get_running_agents() {
-  # Fleet-synced: reads same status.json as /subagents-fleet (pi-subagents fleet)
+  # Fleet-synced: reads same status.json as /subagents-fleet — mirrors dashboard/server.js:204 TTL + stale logic
   local fleet_count=0
+  local now_ms=$(date +%s000 2>/dev/null || echo $(( $(date +%s) * 1000 )))
+  # fallback if date doesn't support %s000
+  if [ ${#now_ms} -lt 10 ]; then now_ms=$(( $(date +%s) * 1000 )); fi
   local runs=$(ls "$SUBAGENT_RUNS"/*/status.json 2>/dev/null)
   if [ -n "$runs" ]; then
     for f in $runs; do
       local id=$(basename $(dirname "$f"))
-      local state=$(grep -o '"state"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" 2>/dev/null | head -1 | cut -d'"' -f4)
+      local raw_state=$(grep -o '"state"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" 2>/dev/null | head -1 | cut -d'"' -f4)
+      if [ -z "$raw_state" ]; then raw_state=$(grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" 2>/dev/null | head -1 | cut -d'"' -f4); fi
+      raw_state=${raw_state:-unknown}
+      local lastUpdate=$(grep -o '"lastUpdate"[[:space:]]*:[[:space:]]*[0-9]*' "$f" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
+      local startedAt=$(grep -o '"startedAt"[[:space:]]*:[[:space:]]*[0-9]*' "$f" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
+      startedAt=${startedAt:-0}
+      lastUpdate=${lastUpdate:-$startedAt}
+      # stale detection: running >30s without heartbeat → failed (mirrors server.js:49)
+      local state="$raw_state"
+      if { [ "$raw_state" = "running" ] || [ "$raw_state" = "pending" ]; } && [ -n "$lastUpdate" ] && [ "$lastUpdate" != "0" ]; then
+        local age=$((now_ms - lastUpdate))
+        if [ "$age" -gt 30000 ]; then state="failed"; fi
+      fi
+      local mapped=$(map_state "$state")
+      # TTL filter: running/waiting always, error 60s, done 30s
+      local show=0
+      if [ "$mapped" = "running" ] || [ "$mapped" = "waiting" ]; then show=1
+      elif [ "$mapped" = "error" ]; then
+        local age=$((now_ms - lastUpdate)); if [ "$age" -lt 60000 ]; then show=1; fi
+      elif [ "$mapped" = "done" ]; then
+        local age=$((now_ms - lastUpdate)); if [ "$age" -lt 30000 ]; then show=1; fi
+      fi
+      if [ "$show" -eq 0 ]; then continue; fi
       local agent=$(grep -o '"agent"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" 2>/dev/null | head -1 | cut -d'"' -f4)
-      local tokens=$(grep -o '"totalTokens"[[:space:]]*:[[:space:]]*[0-9]*' "$f" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
-      local elapsed=$(grep -o '"durationMs"[[:space:]]*:[[:space:]]*[0-9]*' "$f" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
-      if [ -n "$elapsed" ]; then elapsed=$((elapsed/1000)); else elapsed=0; fi
+      if [ -z "$agent" ]; then agent=$(grep -o '"workflowKey"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" 2>/dev/null | head -1 | cut -d'"' -f4); fi
       if [ -z "$agent" ]; then agent="coder"; fi
-      if [ -z "$tokens" ]; then tokens="-"; fi
-      printf "  ${C_CYAN}▣${C_RESET} ${C_BOLD}[%-8s]${C_RESET} ${C_DIM}%s${C_RESET} ${C_YELLOW}%s${C_RESET} ${C_DIM}%ss %s tok${C_RESET}\n" "$agent" "$id" "$state" "$elapsed" "$tokens"
+      local tokens=$(extract_tokens "$f")
+      local durationMs=$(grep -o '"durationMs"[[:space:]]*:[[:space:]]*[0-9]*' "$f" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
+      if [ -z "$durationMs" ] || [ "$durationMs" = "null" ]; then
+        if [ "$state" = "running" ] || [ "$state" = "pending" ]; then durationMs=$((now_ms - startedAt)); else durationMs=$((lastUpdate - startedAt)); fi
+      fi
+      if [ "$durationMs" -lt 0 ] 2>/dev/null; then durationMs=0; fi
+      local elapsed=$((durationMs/1000))
+      if [ -z "$tokens" ]; then tokens="0"; fi
+      # workflowGraph flow if present
+      local flow=""
+      if grep -q "workflowGraph" "$f" 2>/dev/null; then
+        flow=$(grep -o '"workflowGraph"[[:space:]]*:[^{]*{[^}]*}' "$f" 2>/dev/null | head -1 | cut -c1-40)
+        if [ -n "$flow" ]; then flow=" flow"; fi
+      fi
+      # children count
+      local children=""
+      if grep -q '"children"' "$f" 2>/dev/null; then
+        local cc=$(grep -o '"children"[[:space:]]*:[[:space:]]*\[[^]]*\]' "$f" 2>/dev/null | grep -o '"agent"' | wc -l | tr -d ' ')
+        if [ "$cc" -gt 0 ] 2>/dev/null; then children=" +${cc}c"; fi
+      fi
+      # color by state
+      local stateColor="$C_YELLOW"
+      if [ "$mapped" = "running" ]; then stateColor="$C_GREEN"; elif [ "$mapped" = "waiting" ]; then stateColor="$C_YELLOW"; elif [ "$mapped" = "done" ]; then stateColor="$C_DIM"; elif [ "$mapped" = "error" ]; then stateColor="$C_MAG"; fi
+      printf "  ${C_CYAN}▣${C_RESET} ${C_BOLD}[%-8s]${C_RESET} ${C_DIM}%s${C_RESET} ${stateColor}%s${C_RESET} ${C_DIM}%ss %s tok${C_RESET}%s%s\n" "$agent" "$id" "$mapped" "$elapsed" "$tokens" "$children" "$flow"
       fleet_count=$((fleet_count+1))
     done
   fi
@@ -79,25 +154,40 @@ get_running_agents() {
 }
 
 get_fleet_stats() {
-  # Session stats synced to fleet: totalTokens, toolCalls, tasksComplete, uptime
+  # Session stats synced to fleet: totalTokens, toolCalls, tasksComplete, uptime — mirrors server.js:275 (all fleet, not filtered, for stats)
   local totalTokens=0 toolCalls=0 tasksDone=0 tasksTotal=0 maxDur=0
   local runs=$(ls "$SUBAGENT_RUNS"/*/status.json 2>/dev/null)
   if [ -n "$runs" ]; then
     for f in $runs; do
-      local tok=$(grep -o '"totalTokens"[[:space:]]*:[[:space:]]*[0-9]*' "$f" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
+      local tok=$(extract_tokens "$f")
       local tools=$(grep -o '"toolCount"[[:space:]]*:[[:space:]]*[0-9]*' "$f" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
       local dur=$(grep -o '"durationMs"[[:space:]]*:[[:space:]]*[0-9]*' "$f" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
       local state=$(grep -o '"state"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" 2>/dev/null | head -1 | cut -d'"' -f4)
-      [ -n "$tok" ] && totalTokens=$((totalTokens+tok))
-      [ -n "$tools" ] && toolCalls=$((toolCalls+tools))
+      # handle missing durationMs like server.js
+      if [ -z "$dur" ] || [ "$dur" = "null" ]; then
+        local startedAt=$(grep -o '"startedAt"[[:space:]]*:[[:space:]]*[0-9]*' "$f" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
+        local lastUpdate=$(grep -o '"lastUpdate"[[:space:]]*:[[:space:]]*[0-9]*' "$f" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
+        startedAt=${startedAt:-0}; lastUpdate=${lastUpdate:-$startedAt}
+        if [ "$state" = "running" ] || [ "$state" = "pending" ]; then dur=$(( $(date +%s000 2>/dev/null || echo $(( $(date +%s)*1000 ))) - startedAt )); else dur=$((lastUpdate - startedAt)); fi
+      fi
+      if [ -n "$tok" ] && [ "$tok" != "null" ]; then totalTokens=$((totalTokens+tok)); fi
+      if [ -n "$tools" ] && [ "$tools" != "null" ]; then toolCalls=$((toolCalls+tools)); fi
       tasksTotal=$((tasksTotal+1))
-      if [ "$state" = "complete" ] || [ "$state" = "done" ]; then tasksDone=$((tasksDone+1)); fi
-      [ -n "$dur" ] && [ "$dur" -gt "$maxDur" ] && maxDur=$dur
+      if [ "$state" = "complete" ]; then tasksDone=$((tasksDone+1)); fi
+      # also count mapped done
+      local mapped=$(map_state "$state")
+      if [ "$mapped" = "done" ] && [ "$state" != "complete" ]; then tasksDone=$((tasksDone+1)); fi
+      if [ -n "$dur" ] && [ "$dur" -gt "$maxDur" ] 2>/dev/null; then maxDur=$dur; fi
     done
   fi
   if [ $totalTokens -eq 0 ]; then totalTokens=30880; toolCalls=41; tasksDone=1; tasksTotal=4; maxDur=$((18*60*1000+42*1000)); fi
+  if [ "$maxDur" -lt 0 ] 2>/dev/null; then maxDur=0; fi
   local uptime=$(printf "%02d:%02d:%02d" $((maxDur/3600000)) $(((maxDur%3600000)/60000)) $(((maxDur%60000)/1000)))
-  printf "${C_CYAN}total tokens${C_RESET} ${C_BOLD}%s${C_RESET}  ${C_BLUE}tool calls${C_RESET} %s  ${C_YELLOW}tasks${C_RESET} %s/%s  ${C_DIM}uptime${C_RESET} %s" "$(printf "%'d" $totalTokens 2>/dev/null || echo $totalTokens)" "$toolCalls" "$tasksDone" "$tasksTotal" "$uptime"
+  # BusyBox printf "%'d" fails — fallback without comma
+  local fmtTokens
+  fmtTokens=$(printf "%'d" $totalTokens 2>/dev/null || echo $totalTokens)
+  if [ "$fmtTokens" = "%'d" ] || echo "$fmtTokens" | grep -q "%"; then fmtTokens="$totalTokens"; fi
+  printf "${C_CYAN}total tokens${C_RESET} ${C_BOLD}%s${C_RESET}  ${C_BLUE}tool calls${C_RESET} %s  ${C_YELLOW}tasks${C_RESET} %s/%s  ${C_DIM}uptime${C_RESET} %s" "$fmtTokens" "$toolCalls" "$tasksDone" "$tasksTotal" "$uptime"
 }
 
 draw_dashboard() {
@@ -181,10 +271,12 @@ Middle 3/4 : Running agents (medium windows)
 Keys:
   1-9  open Nth session from left
   a    list running agent windows and pick one
+       inside agent: [s] steer (follow_up/steer/auto)  [D] stop  [t] transcript  [H]/[Enter] Herdr  [q] back
   n    new pi session (pi --session-id pi-personal-agent-main)
   r    refresh dashboard
   q    quit to bash
   h    this help
+  s/D/t  fleet inspector parity: s steer, D stop, t transcript (also in agent picker), x tool details (web)
 
 Bypass dashboard on login:
   PI_NO_AUTO=1 docker exec -it pi-personal-agent bash
@@ -209,15 +301,28 @@ open_session() {
 
 open_agent() {
   echo ""
-  echo -e "${C_BOLD}Running agent windows:${C_RESET}"
+  echo -e "${C_BOLD}Running agent windows (fleet — same as /subagents-fleet):${C_RESET}"
   local i=1
   declare -a agent_files
-  # list subagent runs
+  # list subagent runs — use same TTL filter idea: show running/waiting + recent done/error via get_running_agents count
   for f in "$SUBAGENT_RUNS"/*/status.json; do
     [ -e "$f" ] || continue
     local id=$(basename $(dirname "$f"))
     local agent=$(grep -o '"agent"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" 2>/dev/null | head -1 | cut -d'"' -f4)
-    echo "  $i) $id [$agent] $f"
+    local state=$(grep -o '"state"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" 2>/dev/null | head -1 | cut -d'"' -f4)
+    local mapped=$(map_state "${state:-unknown}")
+    # quick TTL check: only show if active or recent (like get_running_agents)
+    local lastUpdate=$(grep -o '"lastUpdate"[[:space:]]*:[[:space:]]*[0-9]*' "$f" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
+    local startedAt=$(grep -o '"startedAt"[[:space:]]*:[[:space:]]*[0-9]*' "$f" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
+    lastUpdate=${lastUpdate:-$startedAt}
+    local now_ms=$(date +%s000 2>/dev/null || echo $(( $(date +%s)*1000 )))
+    local show=0
+    if [ "$mapped" = "running" ] || [ "$mapped" = "waiting" ]; then show=1
+    elif [ "$mapped" = "error" ]; then local age=$((now_ms - lastUpdate)); [ "$age" -lt 60000 ] && show=1
+    elif [ "$mapped" = "done" ]; then local age=$((now_ms - lastUpdate)); [ "$age" -lt 30000 ] && show=1
+    fi
+    if [ "$show" -eq 0 ] && [ -z "$SHOW_ALL" ]; then continue; fi
+    printf "  %2d) %s [%-8s] %s (%s)\n" "$i" "$id" "${agent:-coder}" "$state" "$mapped"
     agent_files[$i]="$f"
     i=$((i+1))
   done
@@ -233,17 +338,74 @@ open_agent() {
     local f="${agent_files[$pick]}"
     local dir=$(dirname "$f")
     local sid=$(basename "$dir")
-    echo -e "${C_GREEN}→ Opening agent $sid${C_RESET}"
-    # Try to find session file for this run
-    local sess=$(find "$SESSION_DIR" -name "*$sid*.jsonl" 2>/dev/null | head -1)
-    if [ -n "$sess" ]; then
-      exec pi --session "$sess"
-    else
-      # fallback to subagent status view
-      echo "No session file for $sid, showing status..."
-      pi -p "subagent {action:\"status\", id:\"$sid\", view:\"transcript\"}" --mode text 2>&1 | less -R
-      read -p "Press Enter to return..."
-    fi
+    echo -e "${C_GREEN}→ Selected agent $sid${C_RESET}"
+    # Show status and offer fleet inspector actions: s/D/t/H/Enter
+    while true; do
+      echo ""
+      echo -e "${C_BOLD}Agent $sid actions (like fleet inspector):${C_RESET} ${C_YELLOW}[s]${C_RESET} steer  ${C_YELLOW}[D]${C_RESET} stop  ${C_YELLOW}[t]${C_RESET} transcript  ${C_YELLOW}[H]${C_RESET} Herdr  ${C_YELLOW}[Enter]${C_RESET} open session  ${C_YELLOW}[q]${C_RESET} back"
+      # show current state
+      local cur_state=$(grep -o '"state"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" 2>/dev/null | head -1 | cut -d'"' -f4)
+      echo -e "${C_DIM}state: $cur_state  dir: $dir${C_RESET}"
+      if [ -f "$dir/output-0.log" ]; then echo -e "${C_DIM}last 3 log lines:${C_RESET}"; tail -n 3 "$dir/output-0.log" 2>/dev/null | sed "s/^/  /"; fi
+      read -p "Action [s/D/t/H/Enter/q]: " act
+      case "$act" in
+        s|S)
+          read -p "Steer message: " msg
+          if [ -n "$msg" ]; then
+            read -p "Mode [follow_up/steer/auto] (default follow_up): " mode
+            mode=${mode:-follow_up}
+            local chanDir="/tmp/pi-subagents-uid-0/supervisor-channels"
+            mkdir -p "$chanDir" 2>/dev/null
+            local out="$chanDir/$sid.steer.json"
+            printf '{"runId":"%s","mode":"%s","message":' "$sid" "$mode" > "$out"
+            # json escape message
+            python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$msg" 2>/dev/null | tr -d '\n' >> "$out" 2>/dev/null || printf '"%s"' "$msg" >> "$out"
+            printf ',"ts":%s,"from":"dashboard.sh"}' "$(date +%s000 2>/dev/null || echo $(( $(date +%s)*1000 )))" >> "$out"
+            echo -e "${C_GREEN}→ steer queued to $out mode=$mode${C_RESET}"
+            # try also via pi supervisor if available
+            if command -v pi >/dev/null 2>&1; then pi -p "subagent_supervisor({action:\"send\", runId:\"$sid\", message:\"$msg\", mode:\"$mode\"})" --mode text 2>&1 | head -n 5 || true; fi
+          fi
+          ;;
+        D)
+          read -p "Stop $sid? [y/N]: " confirm
+          if [[ "$confirm" =~ ^[yY] ]]; then
+            echo '{"ts":'$(date +%s000 2>/dev/null || echo $(( $(date +%s)*1000 )))',"from":"dashboard.sh"}' > "$dir/stop.requested"
+            echo -e "${C_GREEN}→ stop.requested written${C_RESET}"
+            # also try pi stop
+            if command -v pi >/dev/null 2>&1; then pi -p "subagent({action:\"stop\", id:\"$sid\"})" --mode text 2>&1 | head -n 10 || true; fi
+          fi
+          ;;
+        t|T)
+          echo -e "${C_BOLD}--- transcript (output-0.log tail 50 + events.jsonl 20) ---${C_RESET}"
+          if [ -f "$dir/output-0.log" ]; then echo "--- output-0.log ---"; tail -n 50 "$dir/output-0.log" 2>/dev/null | cat -n; fi
+          if [ -f "$dir/events.jsonl" ]; then echo "--- events.jsonl ---"; tail -n 20 "$dir/events.jsonl" 2>/dev/null | cat -n; fi
+          if [ -f "$f" ]; then echo "--- status.json ---"; cat "$f" 2>/dev/null | head -n 60; fi
+          echo "--- end ---"
+          read -p "Press Enter to continue..."
+          ;;
+        H|h)
+          local sess=$(find "$SESSION_DIR" -name "*$sid*.jsonl" 2>/dev/null | head -1)
+          if [ -n "$sess" ]; then
+            echo -e "${C_GREEN}→ Herdr: pi --session \"$sess\"${C_RESET}"
+            exec pi --session "$sess"
+          else
+            local sess2=$(grep -o '"sessionFile"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" 2>/dev/null | head -1 | cut -d'"' -f4)
+            if [ -n "$sess2" ] && [ -f "$sess2" ]; then exec pi --session "$sess2"; else echo "No session file found for $sid"; fi
+          fi
+          ;;
+        "")
+          # Enter → Herdr
+          local sess=$(find "$SESSION_DIR" -name "*$sid*.jsonl" 2>/dev/null | head -1)
+          if [ -n "$sess" ]; then exec pi --session "$sess"; else echo "No session file for $sid, try t for transcript"; fi
+          ;;
+        q|Q)
+          break
+          ;;
+        *)
+          echo "Unknown: $act — [h] help"
+          ;;
+      esac
+    done
   fi
 }
 
