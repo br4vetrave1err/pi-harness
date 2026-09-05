@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Data Design · Pi-Harness</title>
+<link rel="stylesheet" href="./assets/css/style.css"/>
+</head>
+<body>
+<header class="docs-header">
+  <a class="brand" href="./index.html"><div class="brand-mark">π</div><div class="brand-text"><div class="brand-title">Pi-Harness</div><div class="brand-sub">Docs · Data Design v1.0</div></div></a>
+  <nav class="header-nav"><a href="./index.html">Overview</a><a href="./srs.html">SRS</a><a href="./sad.html">SAD</a><a href="./tdd.html">TDD</a><a href="./test-plan.html">Test Plan</a><a href="./data-design.html" class="active">Data Design</a></nav>
+  <div class="header-actions"><div class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input id="docsSearch" placeholder="Search docs…"/></div><a class="btn" href="./index.html">← Hub</a></div>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-section"><div class="sidebar-title">Data Design</div><ul class="nav-list">
+      <li><a href="#s1"><span class="nav-icon">1</span> Overview & bus</a></li>
+      <li><a href="#s2"><span class="nav-icon">2</span> Canonical schemas</a></li>
+      <li><a href="#s3"><span class="nav-icon">3</span> Sessions & index</a></li>
+      <li><a href="#s4"><span class="nav-icon">4</span> Channels & GC</a></li>
+      <li><a href="#s5"><span class="nav-icon">5</span> Indexes & queries</a></li>
+      <li><a href="#s6"><span class="nav-icon">6</span> Bounded & safety</a></li>
+      <li><a href="#s7"><span class="nav-icon">7</span> Lifecycle state machine</a></li>
+      <li><a href="#app"><span class="nav-icon">A</span> Mounts & lineage</a></li>
+    </ul></div>
+  </aside>
+  <main class="content"><div class="content-inner">
+    <div class="breadcrumbs"><a href="./index.html">Docs</a><span class="sep">/</span><span>Data Design</span></div>
+    <div class="doc-label">Data Design · Filesystem-as-bus · schemas · GC</div>
+    <h1 class="doc-title">Data Design</h1>
+    <p class="doc-subtitle">Filesystem is the database. This doc pins the on-disk contract so <code class="inline">dashboard/server.js:25</code> and <code class="inline">dashboard.sh:57</code> cannot drift. All sizes/bounds are enforced at read time.</p>
+    <div class="version-bar"><span class="pill"><strong>Data Design 1.0</strong> 2026-09-04</span><span class="pill">Bus root: <strong>/tmp/pi-subagents-uid-0</strong></span><span class="pill">Sessions: <strong>/root/.pi/agent/sessions/--workspace--</strong></span></div>
+
+    <div class="toc"><div class="toc-title">Contents</div><ol>
+      <li><a href="#s1">1 Overview — filesystem bus, why not DB</a></li>
+      <li><a href="#s2">2 Canonical schemas — status.json, events.jsonl, output-*.log, process-terminal.json</a></li>
+      <li><a href="#s3">3 Sessions (jsonl) & correlation</a></li>
+      <li><a href="#s4">4 Supervisor channels, completion replay, subagent-artifacts, GC</a></li>
+      <li><a href="#s5">5 Derived views & indexes — fleetBySession, sort, TTL</a></li>
+      <li><a href="#s6">6 Boundedness & safety — 64KB/200, 5MB→500KB, traversal</a></li>
+      <li><a href="#s7">7 Lifecycle & reconciliation state machine</a></li>
+      <li><a href="#app">Appendix — mounts, artifacts tree, lineage</a></li>
+    </ol></div>
+
+    <h2 id="s1">1 — Overview</h2>
+    <p>Pi-Harness has no relational store. The <strong>write side</strong> is the pi-subagents extension forking child sessions; the <strong>read side</strong> tails files. This gives durability for free (even if parent terminal detaches) and debuggability via <code class="inline">ls + cat</code>.</p>
+    <div class="diagram"><pre>&lt;tmpdir&gt;/pi-subagents-uid-0/
+  async-subagent-runs/&lt;runId&gt;/          ← per-run durable dir (canonical)
+  async-subagent-results/&lt;runId&gt;.json   ← aggregated results
+  supervisor-channels/&lt;runId&gt;.steer.json ← steer inbox
+
+/root/.pi/agent/sessions/--workspace--/
+  *.jsonl                               ← chat transcripts (append-only)
+
+/workspace/.pi/agent/...                ← host-mounted agent cards</pre></div>
+    <div class="callout"><div class="callout-title">Invariant (T4)</div><div style="font-size:12.5px; color:var(--text-dim)">If a file is not on this bus, it is not observable. Dashboard never fabricates fleetState except via reconciler mapping + stale guard.</div></div>
+
+    <h2 id="s2">2 — Canonical schemas</h2>
+    <h3>2.1 status.json — the master (1 per run)</h3>
+    <pre>{
+  "lifecycleArtifactVersion": 3,
+  "runId": "m1a2b3c4-d5e6",
+  "sessionId": "sess-xyz",
+  "sessionFile": "/root/.pi/agent/sessions/--workspace--/2026-09-04T14_53_00_abc.jsonl",
+  "mode": "background",
+  "state": "running",                 // raw: running|pending|paused|complete|failed|stopped
+  "startedAt": 1725464000000,
+  "lastUpdate": 1725464012000,
+  "endedAt": null,
+  "durationMs": 12000,                // may be null → derived
+  "cwd": "/workspace",
+  "asyncDir": "/tmp/pi-subagents-uid-0/async-subagent-runs/m1a2b3c4-d5e6",
+  "outputFile": "/tmp/.../output-0.log",
+  "workflowGraph": { "flow": "scout→worker", "type": "chain" },
+  "steps": [{ "agent": "coder", "task": "implement …" }],
+  "results": [],
+  "totalTokens": { "window": 3100, "total": 4200, "input": 2100, "output": 2100 } // or number 8340
+               // reconciler normalizes: tokens=total||window||input, windowTokens=window, spentTokens=total||input+output
+  "totalCost": 0.0123,
+  "model": "freeflow/dots-studio/dots-3-note-preview:free",
+  "toolCount": 14,
+  "turnCount": 3,
+  "launchResolvedExtensions": ["pi-web-access","pi-subagents"],
+  "runtimeAcknowledgedExtensions": ["pi-subagents"],
+  "modelAttempts": null,
+  "children": [{ "agent": "researcher", "state": "running", "task": "scan …" }]
+}</pre>
+    <div class="callout blue"><div class="callout-title">Reconciliation rules (must)</div><div style="font-size:12.5px; color:var(--text-dim)"><code class="inline">dashboardStatus = state pending|running→running, paused→waiting, complete→done, failed|stopped→error</code> (<code class="inline">server.js:96</code>) + <code class="inline">stale (now-lastUpdate&gt;30s) ⇒ failed</code> with <code class="inline">duration frozen</code> (<code class="inline">:49</code>) + <code class="inline">sort startedAt desc</code> (<code class="inline">:125</code>).</div></div>
+
+    <h3>2.2 events.jsonl — append-only lifecycle log</h3>
+    <pre>{"type":"subagent.run.started","runId":"m1…","agent":"coder","task":"…","ts":1725464000000,"mode":"shell"}
+{"type":"subagent.step.started","step":"coder-1","ts":1725464001000}
+{"type":"subagent.steer.requested","runId":"m1…","mode":"follow_up","message":"…","ts":1725464010000}
+{"type":"subagent.steer.delivered","runId":"m1…","ts":1725464011000}
+{"type":"subagent.run.completed","runId":"m1…","ts":1725464020000}</pre>
+    <p>Tail fallback when <code class="inline">output-*.log</code> is absent (<code class="inline">server.js:85</code>): 5 last events mapped to <code class="inline">{ts,kind:'tool', text: `${type}: ${json.slice(0,80)}`}</code>.</p>
+
+    <h3>2.3 output-*.log — live tail (unstructured)</h3>
+    <ul>
+      <li>Primary read is <code class="inline">output-*.log</code> sorted lexicographically, last file → split <code class="inline">'\n'</code> → last <code class="inline">8</code> lines (<code class="inline">server.js:74</code>) → <code class="inline">kind</code> by <code class="inline">/ERR|error|WARN/</code> → <code class="inline">err</code>, <code class="inline">/\[.*\]/</code> → <code class="inline">tool</code>, else <code class="inline">out</code> (log lines are <code class="inline">120ch</code> truncated).</li>
+      <li>Modal reads bounded form: requestedLines <code class="inline">min(max(parse(lines||50),1),200)</code>, <code class="inline">64KB</code> slice, <code class="inline">totalBytes</code> reported.</li>
+    </ul>
+
+    <h3>2.4 process-terminal.json — proof file</h3>
+    <pre>// when observed (parent saw runner close + lease free):
+{"observed": true, "status": "observed", "proof": "observed"}
+// candidate (private runner evidence) or missing:
+{"observed": false}  or  file absent → processTerminal = unknown (server.js:118)</pre>
+    <p>UI badge: <code class="inline">● observed</code> (green) else <code class="inline">○ unknown</code> amber (<code class="inline">App.tsx:199</code>) — never infer from <code class="inline">endedAt</code>.</p>
+
+    <h2 id="s3">3 — Sessions (jsonl) & correlation</h2>
+    <pre>/root/.pi/agent/sessions/--workspace--/2026-09-04T09_41_00_&lt;id&gt;.jsonl
+{"timestamp":1725436800000,"message":{"role":"user","content":[{"type":"text","text":"refactor auth …"}]}}
+{"type":"session","toolName":"read","message":{"role":"assistant","content":[{"type":"toolCall","text":"read …"}]}}
+{"message":{"role":"toolResult","content":[{"text":"file content"}]},"isError":false}</pre>
+    <p><strong>Parser</strong> <code class="inline">parseSessionFile(:129)</code>: counts <code class="inline">lines</code>, extracts <code class="inline">title</code> (<code class="inline">c.text slice 0,30</code>) + <code class="inline">preview 0,40</code> from first <code class="inline">type:text</code>, tags by substring (<code class="inline">coder&gt;tester&gt;reviewer… else main</code>), time from filename <code class="inline">slice 11,16</code> else <code class="inline">mtime</code> (<code class="inline">App.tsx:198</code>).</p>
+    <p><strong>Correlation</strong> <code class="inline">server.js:175 fleetBySession: Map&lt;sessionFile → FleetEntry&gt;</code> → <code class="inline">GET /api/sessions</code> enriches <code class="inline">{fleetRunId, fleetState}</code> (single-source proof). Frontend <code class="inline">Sidebar</code> uses that map to highlight live sessions (<code class="inline">App.tsx:195</code>).</p>
+
+    <h2 id="s4">4 — Supervisor channels, completion replay, subagent-artifacts, GC</h2>
+    <div class="table-wrap"><table><thead><tr><th>Dir / file</th><th>Writer</th><th>Reader</th><th>Contract</th></tr></thead><tbody>
+      <tr><td class="mono">supervisor-channels/&lt;runId&gt;.steer.json</td><td><code class="inline">server.js:468 POST /fleet/:id/steer</code></td><td><code class="inline">pi-subagents supervisor</code></td><td><code class="inline">{runId,mode∈{steer,follow_up,auto},message,ts,from:'dashboard'}</code></td></tr>
+      <tr><td class="mono">asyncDir/stop.requested</td><td><code class="inline">:484</code></td><td>supervisor <code class="inline">{action:"stop"}</code></td><td><code class="inline">{ts,from:'dashboard'}</code></td></tr>
+      <tr><td class="mono">async-subagent-results/&lt;runId&gt;.json</td><td>child runner</td><td><code class="inline">bg_wait</code></td><td>Aggregated output for <code class="inline">subagent({action:"status", view:"result"})</code></td></tr>
+      <tr><td class="mono">~/.pi/agent/sessions/…/subagent-artifacts/outputs/&lt;runId&gt;/output.md</td><td>pi-subagents</td><td>inspector</td><td>Lifecycle-v3 artifact copy</td></tr>
+      <tr><td class="mono">/root/.pi/agent/pi-freeflow.log</td><td><code class="inline">pi-freeflow</code></td><td><code class="inline">entrypoint tail_with_prefix :26</code> → <code class="inline">docker logs</code></td><td>Line-buffered <code class="inline">tail -F -n0</code>, survives rotation</td></tr>
+    </tbody></table></div>
+    <h3>GC policy</h3>
+    <ul>
+      <li>Visibility GC (TTL): <code class="inline">done</code> visible 30 s, <code class="inline">error/failed</code> 60 s after <code class="inline">lastUpdate</code> (<code class="inline">server.js:210</code>); <code class="inline">?all=true</code> bypasses.</li>
+      <li>Physical GC: <code class="inline">setInterval 60 s :642</code> deletes dirs where <code class="inline">state∈{failed,complete,stopped,error} && now-lastUpdate&gt;10min</code> — prevents disk leak.</li>
+    </ul>
+
+    <h2 id="s5">5 — Derived views & indexes</h2>
+    <h3>5.1 Derived fleet entry (projection)</h3>
+    <pre>derived FleetEntry extends status.json with:
+  id = runId.slice(0,8)
+  fullId = runId
+  dashboardStatus // via map + stale
+  tokens, windowTokens, spentTokens // normalized
+  elapsed = floor(durationMs/1000) or floor(now-startedAt)
+  lines: Tail[8] || Events[5] || info
+  transcript: {truncated, totalBytes, maxBytes:64KB}
+  processTerminal // observed|unknown</pre>
+    <h3>5.2 Indexes</h3>
+    <div class="table-wrap"><table><thead><tr><th>Index</th><th>Key</th><th>Use</th></tr></thead><tbody>
+      <tr><td><code class="inline">fleetBySession</code></td><td><code class="inline">sessionFile → runId</code></td><td><code class="inline">GET /api/sessions</code> enrich (<code class="inline">:182</code>)</td></tr>
+      <tr><td><code class="inline">fleet find</code></td><td><code class="inline">id|runId|fullId</code></td><td><code class="inline">GET /fleet/:id, steer, stop (:441)</code></td></tr>
+      <tr><td><code class="inline">hash</code></td><td><code class="inline">runId:state:lastUpdate</code></td><td><code class="inline">SSE change detect (:529)</code></td></tr>
+      <tr><td>Sort</td><td><code class="inline">startedAt desc</code></td><td>FleetView order (<code class="inline">:125</code>)</td></tr>
+    </tbody></table></div>
+
+    <h2 id="s6">6 — Boundedness & safety</h2>
+    <div class="table-wrap"><table><thead><tr><th>Rule</th><th>Limit</th><th>Enforce</th><th>Output</th></tr></thead><tbody>
+      <tr><td><code class="inline">GET /api/fleet/:id?lines</code></td><td><code class="inline">1…200</code> lines (default 50), <code class="inline">64KB</code></td><td><code class="inline">server.js:439</code> <code class="inline">requestedLines clamp + slice(-64KB)</code></td><td><code class="inline">truncated boolean + totalBytes</code></td></tr>
+      <tr><td><code class="inline">events.jsonl</code></td><td><code class="inline">50</code> last</td><td><code class="inline">:452</code></td><td>cap</td></tr>
+      <tr><td><code class="inline">GET /api/session/:id</code></td><td><code class="inline">5MB → 500KB slice</code></td><td><code class="inline">:315 stat.size guard</code></td><td><code class="inline">strip prefix, return 500KB</code></td></tr>
+      <tr><td><code class="inline">dispatch task</code></td><td>2000 ch</td><td><code class="inline">:331 cleanTask slice</code></td><td>truncate</td></tr>
+      <tr><td>Path traversal</td><td>must stay inside <code class="inline">SESSIONS_DIR</code></td><td><code class="inline">:359 basename + normalize + prefix</code></td><td>400 invalid id</td></tr>
+    </tbody></table></div>
+    <div class="callout red"><div class="callout-title">Trap</div><div style="font-size:12.5px; color:var(--text-dim)">Do not <code class="inline">JSON.parse</code> unbounded logs into memory — read via <code class="inline">readFileSync</code> then <code class="inline">split('\n')</code> slice. Dispatch must <code class="inline">spawn</code> with <code class="inline">on('error')</code> or ENOENT crashes Node (<code class="inline">server.js:385</code>).</div></div>
+
+    <h2 id="s7">7 — Lifecycle state machine</h2>
+    <div class="diagram"><pre>pending ──► running ──► paused (→ waiting on dashboard) ──► running
+   │            │             │
+   │            ├─────────────┼──► complete (→ done)  ── TTL 30s visible ── GC 10m
+   │            │             └──► failed   (→ error) ── TTL 60s ─────────── GC
+   │            └────────────────► stopped  (→ error) ── via stop.requested
+   │
+   └── stale guard: (running|pending && now-lastUpdate&gt;30s) ⇒ failed (frozen duration) [server.js:49]</pre></div>
+    <p>Mapping to dashboard is total: every fleet state hits exactly one <code class="inline">dashboardStatus</code>. Unknowns remain readable (no inference from <code class="inline">endedAt</code>).</p>
+
+    <h2 id="app">Appendix — mounts & tree</h2>
+    <h3>Volume graph (authoritative)</h3>
+    <div class="table-wrap"><table><thead><tr><th>Host (Windows)</th><th>Container path</th><th>Service</th><th>Mode</th></tr></thead><tbody>
+      <tr><td class="mono">E:/projects/pi-harness</td><td class="mono">/workspace</td><td>pi-personal-agent, pi-dashboard</td><td>ro in dashboard</td></tr>
+      <tr><td class="mono">E:/projects/pi-harness/.pi</td><td class="mono">/root/.pi</td><td>both</td><td>rw agent, ro dashboard</td></tr>
+      <tr><td class="mono">pi-subagents (named volume)</td><td class="mono">/tmp/pi-subagents-uid-0</td><td>both</td><td>rw shared</td></tr>
+      <tr><td class="mono">/var/run/docker.sock</td><td class="mono">/var/run/docker.sock</td><td>both + git-sync</td><td>rw</td></tr>
+      <tr><td class="mono">/workspace/docs</td><td class="mono">/workspace/docs → /docs HTTP</td><td>pi-dashboard</td><td>ro (this sprint)</td></tr>
+    </tbody></table></div>
+    <h3>Artifact tree (on-disk contract)</h3>
+    <pre>/tmp/pi-subagents-uid-0/
+  async-subagent-runs/&lt;runId&gt;/
+    status.json                // canonical (see §2.1, 22 fields)
+    events.jsonl               // lifecycle + steer traces
+    output-0.log               // primary tail (also output-1.log …)
+    process-terminal.json      // observed when parent saw close+lease
+    process-terminal-candidate.json // private runner evidence → maps to unknown
+    stop.requested             // marker written by dashboard stop
+    completion-replay/*.json   // optional replay
+  async-subagent-results/&lt;runId&gt;.json
+  supervisor-channels/&lt;runId&gt;.steer.json
+
+/root/.pi/agent/sessions/--workspace--/
+  2026-09-04T14_53_00_&lt;id&gt;.jsonl   // chat transcript (line-delimited JSON)
+  subagent-artifacts/outputs/&lt;runId&gt;_*/output.md // lifecycle artifact copy
+
+/docs/
+  index.html · srs.html · sad.html · tdd.html · test-plan.html · data-design.html
+  assets/css/style.css · assets/js/docs.js</pre>
+    <h3>Revision lineage</h3>
+    <div class="table-wrap"><table><thead><tr><th>Date</th><th>Commit range</th><th>Data contract delta</th></tr></thead><tbody>
+      <tr><td>2026-09-03</td><td><code class="inline">ecbce48…0a13753</code></td><td>status.json base (runId/state/startedAt/sessionFile)</td></tr>
+      <tr><td>2026-09-04</td><td><code class="inline">46e558f</code></td><td>+ stale guard + 30s TTL + bounded 64KB/200 + traversal guard</td></tr>
+      <tr><td>2026-09-04</td><td><code class="inline">68e9245…8e0b84a</code></td><td>+ window/spent tokens + processTerminal + children + GC 10m + SSE hash</td></tr>
+      <tr><td>2026-09-04</td><td>docs sprint</td><td>+ <code class="inline">/docs/*</code> static dir (not on bus)</td></tr>
+    </tbody></table></div>
+
+    <div class="footer-nav"><a href="./test-plan.html"><span class="label">← Previous</span><span class="title">Test Plan</span></a><a href="./index.html"><span class="label">Next →</span><span class="title">Hub — Overview</span></a></div>
+    <div style="margin-top:18px; font-size:11px; color:var(--text-muted); border-top:1px solid var(--border); padding-top:12px">Data Design is the on-disk contract. Served at <code class="inline">/docs/data-design.html</code> — verify with <code class="inline">ls /tmp/pi-subagents-uid-0/async-subagent-runs/*/status.json | xargs cat | jq .</code></div>
+  </div></main>
+</div>
+<script src="./assets/js/docs.js"></script>
+</body>
+</html>

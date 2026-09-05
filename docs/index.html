@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Pi-Harness Docs — Documentation Hub</title>
+<link rel="stylesheet" href="./assets/css/style.css"/>
+</head>
+<body>
+<header class="docs-header">
+  <a class="brand" href="./index.html">
+    <div class="brand-mark">π</div>
+    <div class="brand-text"><div class="brand-title">Pi-Harness</div><div class="brand-sub">Docs · v0.9.1 · 2026-09-04</div></div>
+  </a>
+  <nav class="header-nav">
+    <a href="./index.html" class="active">Overview</a>
+    <a href="./srs.html">SRS</a>
+    <a href="./sad.html">SAD</a>
+    <a href="./tdd.html">TDD</a>
+    <a href="./test-plan.html">Test Plan</a>
+    <a href="./data-design.html">Data Design</a>
+  </nav>
+  <div class="header-actions">
+    <div class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input id="docsSearch" placeholder="Search docs…"/></div>
+    <a class="btn" href="../dashboard/src/App.tsx" title="Dashboard">Dashboard →</a>
+    <a class="btn primary" href="https://github.com" target="_blank" rel="noreferrer">GitHub</a>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">Getting started</div>
+      <ul class="nav-list">
+        <li><a href="./index.html" class="active"><span class="nav-icon">⌂</span> Overview <span class="badge">hub</span></a></li>
+        <li><a href="./srs.html"><span class="nav-icon">§</span> SRS — Requirements</a></li>
+        <li><a href="./sad.html"><span class="nav-icon">◈</span> SAD — Architecture</a></li>
+        <li><a href="./tdd.html"><span class="nav-icon">⬡</span> TDD — Technical Design</a></li>
+        <li><a href="./test-plan.html"><span class="nav-icon">✓</span> Test Plan</a></li>
+        <li><a href="./data-design.html"><span class="nav-icon">▦</span> Data Design</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Project meta</div>
+      <ul class="nav-list">
+        <li><a href="#quickstart"><span class="nav-icon">▶</span> Quickstart</a></li>
+        <li><a href="#git-history"><span class="nav-icon">◷</span> Git history</a></li>
+        <li><a href="#conventions"><span class="nav-icon">≡</span> Conventions</a></li>
+        <li><a href="#links"><span class="nav-icon">🔗</span> External links</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="callout blue" style="margin:0; padding:10px 12px; border-radius:8px;">
+        <div class="callout-title" style="color:#4da6ff">Live docs</div>
+        <div style="font-size:12px; color:var(--text-dim); line-height:1.5">Served by dashboard at <code class="inline">/docs</code> inside container and Vite dev at <code class="inline">5173/docs</code>. Static build emitted to <code class="inline">dashboard/dist/docs</code>.</div>
+      </div>
+    </div>
+    <div class="sidebar-section" style="font-size:11px; color:var(--text-muted); line-height:1.6; padding:0 6px">
+      <div>Sources: <code class="inline">TASKS.md</code> · <code class="inline">TEST_COVERAGE_PLAN.md</code> · <code class="inline">PLAN-fleet-*.md</code> · <code class="inline">dashboard/server.js</code> · <code class="inline">dashboard/src/App.tsx</code> · git log 22 commits 2026-09-03→04.</div>
+    </div>
+  </aside>
+  <main class="content">
+    <div class="content-inner">
+      <div class="breadcrumbs"><a href="./index.html">Docs</a><span class="sep">/</span><span>Overview</span></div>
+      <div class="doc-label">● Documentation hub · community standard HTML</div>
+      <h1 class="doc-title">Pi-Harness — Multi-Agent Observability Harness</h1>
+      <p class="doc-subtitle">Deterministic Docker harness for <code class="inline">@earendil-works/pi-coding-agent 0.84.4</code> with fleet bus, dual-surface dashboard (React Web + Bash CLI), workflow orchestration, and robust proxy/clamp for AtlasCloud. This hub links the five normative specs derived from the codebase and its git history (22 commits, 2026-09-03 – 2026-09-04).</p>
+      <div class="version-bar">
+        <span class="pill"><strong>v0.9.1</strong> dashboard</span>
+        <span class="pill"><strong>pi 0.84.4</strong> · node 22 · ubuntu 24.04</span>
+        <span class="pill"><strong>fleet TTL</strong> 30s done · 60s error</span>
+        <span class="pill">last code commit <strong>5d55e68</strong> 2026-09-04</span>
+        <span class="status-badge ok">● docs on /docs</span>
+      </div>
+
+      <details class="mobile-toc"><summary>On this page</summary>
+        <ol style="margin:8px 0 0; padding-left:18px; font-size:13px">
+          <li><a href="#what">What this is</a></li>
+          <li><a href="#docs-map">Docs map</a></li>
+          <li><a href="#quickstart">Quickstart</a></li>
+          <li><a href="#git-history">Git history distilled</a></li>
+          <li><a href="#filesystem-bus">Filesystem-as-bus in 15s</a></li>
+          <li><a href="#conventions">Conventions</a></li>
+        </ol>
+      </details>
+
+      <div class="stat-row">
+        <div class="stat"><div class="stat-label">SRS requirements</div><div class="stat-value">42</div><div style="font-size:11px; color:var(--text-muted)">7 groups · 9 axioms · 22 invariants</div></div>
+        <div class="stat"><div class="stat-label">Components C0–C9</div><div class="stat-value">10</div><div style="font-size:11px; color:var(--text-muted)">DAG L0→L5 tracer bullet</div></div>
+        <div class="stat"><div class="stat-label">Test cases</div><div class="stat-value">97</div><div style="font-size:11px; color:var(--text-muted)">67 unit · 22 integ · 8 E2E</div></div>
+        <div class="stat"><div class="stat-label">Artifacts</div><div class="stat-value">dur</div><div style="font-size:11px; color:var(--text-muted)">status · events · output · terminal</div></div>
+      </div>
+
+      <div class="toc">
+        <div class="toc-title">Contents</div>
+        <ol>
+          <li><a href="#what">What Pi-Harness is</a></li>
+          <li><a href="#docs-map">Docs map — read in order</a></li>
+          <li><a href="#quickstart">Quickstart & verify</a></li>
+          <li><a href="#git-history">Git history → spec lineage</a></li>
+          <li><a href="#filesystem-bus">Filesystem-as-bus mental model</a></li>
+          <li><a href="#stack">Stack & deployment</a></li>
+          <li><a href="#conventions">Conventions & reading guide</a></li>
+        </ol>
+      </div>
+
+      <h2 id="what">1 — What this is</h2>
+      <p><strong>Pi-Harness</strong> runs a fleet of detached <code class="inline">pi</code> subagents (<code class="inline">pi-subagents</code> extension) whose durable artifacts live under <code class="inline">/tmp/pi-subagents-uid-0/async-subagent-runs/&lt;runId&gt;/</code>. Every other surface — <code class="inline">dashboard/server.js:25 readFleetStatus()</code>, React Web <code class="inline">dashboard/src/App.tsx</code> (1/4 sessions · 3/4 medium windows · SSE/stream), and Bash TTY <code class="inline">dashboard.sh</code> — is a stateless projection of that bus. No DB, no queue.</p>
+      <div class="grid-2">
+        <div class="card"><div class="card-title">Single source of truth</div>
+          <div style="font-size:13px; color:var(--text-dim)">HTTP <code class="inline">GET /api/fleet</code> and CLI <code class="inline">dashboard.sh</code> parse <em>identical fields</em> (state map, stale TTL, window/spent, bounded 64KB/200) or docs declare it a bug (G1–G6).</div>
+        </div>
+        <div class="card"><div class="card-title">Tracer bullet</div>
+          <div style="font-size:13px; color:var(--text-dim)"><code class="inline">Dockerfile:16 pi install → C1 pi list → C2 coder.md bake 91 → C4 spawn subagent → C5 GET /api/fleet → C6 card in &lt;3s</code> — every phase must re-prove this slice.</div>
+        </div>
+      </div>
+
+      <h2 id="docs-map">2 — Docs map</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Doc</th><th>Answers</th><th>Audience</th><th>Normative refs</th></tr></thead>
+        <tbody>
+          <tr><td><a href="./srs.html"><strong>SRS</strong> — Requirements</a></td><td>What must hold even if every file deleted (axioms T1–T9), functional/non-functional, use cases, acceptance</td><td>Product, QA, external audit</td><td><code class="inline">TASKS.md:2</code> · <code class="inline">PLAN-fleet-*.md</code></td></tr>
+          <tr><td><a href="./sad.html"><strong>SAD</strong> — Architecture (4+1)</a></td><td>C0–C9 decomposition, logical/process/deployment/implementation views, decisions, qualities</td><td>Architects, leads</td><td><code class="inline">TASKS.md:3-4</code></td></tr>
+          <tr><td><a href="./tdd.html"><strong>TDD</strong> — Technical Design</a></td><td>Per-file line refs, algorithms, API contracts, sequences, error/boundedness, config</td><td>Engineers implementing</td><td><code class="inline">dashboard/server.js</code> · <code class="inline">App.tsx</code></td></tr>
+          <tr><td><a href="./test-plan.html"><strong>Test Plan</strong></a></td><td>67U / 22I / 8 E2E, fixtures, thresholds (lines 80 / branches 75), gates, traceability</td><td>QA, CI</td><td><code class="inline">TEST_COVERAGE_PLAN.md</code></td></tr>
+          <tr><td><a href="./data-design.html"><strong>Data Design</strong></a></td><td>Filesystem bus schema, status.json/events.jsonl/output, sessions, GC, lifecycle, indexes</td><td>Backend, infra</td><td><code class="inline">TASKS.md:4 artifact schema</code></td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout">
+        <div class="callout-title">Reading order</div>
+        <div style="font-size:13px; color:var(--text)">New to repo → <strong>this page → SRS §1–2 → SAD §4 diagrams → TDD §3 backend → Data Design §2 schema → Test Plan §5 E2E</strong>. Returning contributor → <strong>TDD §2 components table + Data Design §2 delta</strong>.</div>
+      </div>
+
+      <h2 id="quickstart">3 — Quickstart & verify</h2>
+      <pre>docker compose up -d --build
+docker logs -f pi-dashboard --tail 40        # [dashboard-api] listening on 0.0.0.0:3001
+curl -s http://localhost:3001/api/fleet | jq .count   # 0
+curl -s -X POST http://localhost:3001/api/dispatch -H 'Content-Type: application/json' \
+  -d '{"agent":"coder","task":"echo hello","mode":"shell"}' | jq .runId
+# → medium window appears in web at http://localhost:3000  (3000→3001) and Vite dev http://localhost:5173
+# CLI mirror:
+bash dashboard.sh                              # or docker exec -it pi-personal-agent bash  (auto dashboard)</pre>
+      <div class="callout amber">
+        <div class="callout-title">Ports & health</div>
+        <div style="font-size:12px; color:var(--text-dim)">Web prod <code class="inline">3000→3001</code> (<code class="inline">dashboard</code> service), Vite dev <code class="inline">5173→3001</code> proxy (<code class="inline">vite.config.ts:15</code>), health <code class="inline">wget --spider http://127.0.0.1:3001/api/fleet</code>. CLI requires <code class="inline">SUBAGENT_RUNS=/tmp/pi-subagents-uid-0/async-subagent-runs</code> shared volume <code class="inline">pi-subagents</code>.</div>
+      </div>
+
+      <h2 id="git-history">4 — Git history distilled (22 commits, 2026-09-03 → 04)</h2>
+      <p>Commit lineage is the spec’s provenance — each phase leaves a code + docs trail:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Phase</th><th>Commits</th><th>Spec effect</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Phase 0</strong> foundations</td><td><code class="inline">3762625</code> Docker deterministic build, volume share, entrypoint clamp, lint; <code class="inline">f11fe3c</code> coder bake; <code class="inline">0a13753</code> tester agent + loop; <code class="inline">ecbce48</code> auto-update</td><td>SRS T3 clamp, SAD C0/C1/C2, TDD §5 proxy patch idempotence</td></tr>
+          <tr><td><strong>Phase 1</strong> bus</td><td><code class="inline">46e558f</code> fleet TTL stale→failed + bounded 64KB/200 + traversal guard; <code class="inline">f9a268e</code> CLI parity (object totalTokens, steer/stop)</td><td>Data Design §§2–3; TDD §3 reconciler; SAD C4</td></tr>
+          <tr><td><strong>Phase 2</strong> rendering parity</td><td><code class="inline">64554b0</code> Figma web + CLI 1/4|3/4 · <code class="inline">fa4f8da</code> fleet-synced dashboard · <code class="inline">b4d61d7</code> real-time logs · <code class="inline">8655fae</code> dispatch→fleet · <code class="inline">dd7b036</code> inspector tabs</td><td>SAD C6/C7, SRS §3.3 dashboards</td></tr>
+          <tr><td><strong>Phase 3</strong> workflow & streaming</td><td><code class="inline">4993972</code> SSE + coder-tester-loop fixes</td><td>TDD §8 workflow, SAD C3, Test Plan E2E-01</td></tr>
+          <tr><td><strong>Phase 4–5</strong> hardening</td><td><code class="inline">68e9245</code> fleet extended, healthcheck, slack, git-sync, coverage; <code class="inline">9f0dbf8</code>/<code class="inline">8e0b84a</code> E2E suite + modal flicker fix (deep-equality guard, memo, window/spent)</td><td>Test Plan thresholds; TDD §7 GC/perf; SAD qualities</td></tr>
+        </tbody>
+      </table></div>
+      <p>Plans <code class="inline">PLAN-fleet-sync.md</code> (sync spec) and <code class="inline">PLAN-fleet-observability-UI.md</code> (observability + inspector) are upstream inputs; <code class="inline">TASKS.md</code> converts them to a first-principles DAG C0→C9, <code class="inline">TEST_COVERAGE_PLAN.md</code> to 97 falsifiable cases.</p>
+
+      <h2 id="filesystem-bus">5 — Filesystem-as-bus (15 seconds)</h2>
+      <div class="diagram">
+<pre>pi-personal-agent (Docker)                          pi-dashboard (Docker)               Host
+ ┌──────────────────────┐                           ┌──────────────────┐            ┌──────────┐
+ │ pi -p "Use coder …"  │── spawns ──► /tmp/pi-…/async-subagent-runs/&lt;runId&gt;/  ◄── reads ──┤ dashboard.sh
+ │  (pi-subagents)      │            │  status.json (state, tokens, cost) │  poll 1s + SSE │  (TTY)
+ │                      │            │  events.jsonl (lifecycle)          │   (500ms)      └──────────┘
+ │ extensions:          │            │  output-0.log (live tail)          │         ▲
+ │  pi-freeflow(proxy)  │            │  process-terminal.json              │         │ GET /api/fleet
+ │  pi-subagents        │            └──────────────┬─────────────────────┘         │ GET /api/sessions
+ │  pi-web-access       │                           │ volume pi-subagents             │ POST /api/dispatch
+ │  feynman CLI         │                           │ + .pi/sessions/*.jsonl          │ POST /api/fleet/:id/steer
+ └──────────────────────┘                           └──────────────┬──────────────────┘
+                                                                 ▼
+                                                          Browser: React 19
+                                                          LEFT 1/4 sessions ── 3/4 medium windows
+                                                          Topbar · Sidebar · AgentWindowCard · Modal 5 tabs</pre>
+      </div>
+      <ul>
+        <li><strong>Invariant</strong> <code class="inline">dashboard/server.js:49</code> stale <code class="inline">running lastUpdate+30s&lt;now → failed (duration frozen)</code> prevents 616 s drift.</li>
+        <li><strong>Bounded</strong> <code class="inline">GET /api/fleet/:id?lines=200</code> caps 64 KB/200 msgs; <code class="inline">GET /api/session/:id</code> caps 5 MB → 500 KB slice.</li>
+        <li><strong>Dual TTL</strong> <code class="inline">ACTIVE_TTL 60s (error) · DONE_TTL 30s (done)</code> hides stale DONE bug; frontend double-filters <code class="inline">App.tsx:520 activeOnly running|waiting</code>.</li>
+      </ul>
+
+      <h2 id="stack">6 — Stack & deployment</h2>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Runtime</div>
+          <ul style="margin:6px 0 0; padding-left:16px; font-size:12.5px">
+            <li><code class="inline">FROM ubuntu:24.04</code> (<code class="inline">Dockerfile:1</code>), <code class="inline">node:22</code>, <code class="inline">pi 0.84.4</code> pinned</li>
+            <li><code class="inline">pi-freeflow</code> via <code class="inline">pi install</code> → <code class="inline">/opt/pi-freeflow</code> + proxy dots clamp 390k</li>
+            <li>Volumes: <code class="inline">E:/…:.→/workspace</code>, <code class="inline">.pi→/root/.pi</code>, <code class="inline">pi-subagents→/tmp/pi-subagents-uid-0</code></li>
+            <li>Entrypoint trap SIGTERM, tail <code class="inline">pi-freeflow.log</code>, heartbeat 300s, optional git-sync/task_watcher</li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="card-title">Dashboard</div>
+          <ul style="margin:6px 0 0; padding-left:16px; font-size:12.5px">
+            <li>Backend <code class="inline">Express 4.18</code> on <code class="inline">3001</code>, <code class="inline">server.js:5–676</code> (reconciler, TTL, dispatch, steer/stop)</li>
+            <li>Frontend <code class="inline">React 19 + Vite 8 + Tailwind 4</code>, 1 s poll + SSE <code class="inline">/api/fleet/stream</code></li>
+            <li>CLI <code class="inline">dashboard.sh 22 KB</code> — same bus, <code class="inline">tput cols</code>, 1 s refresh</li>
+            <li>Workflow <code class="inline">coder-tester-loop.js</code> + <code class="inline">.pi/prompts/coder-tester-loop.md</code> (3-round cap)</li>
+          </ul>
+        </div>
+      </div>
+
+      <h2 id="conventions">7 — Conventions & reading guide</h2>
+      <ul>
+        <li>All line refs are <code class="inline">file:line</code> as of commit <code class="inline">5d55e68</code>.</li>
+        <li>Normative keywords: <strong>must</strong> = invariant, <strong>should</strong> = quality target.</li>
+        <li>Tokens: <code class="inline">totalTokens</code> may be <code class="inline">number</code> or <code class="inline">{total, window, input, output}</code>; reconciler normalizes per <code class="inline">server.js:60</code>.</li>
+        <li>State map (canonical): <code class="inline">running|pending → running</code>, <code class="inline">paused → waiting</code>, <code class="inline">complete → done</code>, <code class="inline">failed|stopped → error</code> (<code class="inline">server.js:96</code>) + stale guard.</li>
+        <li>Host vs container: host <code class="inline">E:/projects/pi-harness</code> appears as <code class="inline">/workspace</code> inside <code class="inline">pi-personal-agent</code>; docs at <code class="inline">/workspace/docs</code> served at <code class="inline">/docs</code>.</li>
+      </ul>
+      <div class="footer-nav">
+        <a href="./srs.html"><span class="label">Next →</span><span class="title">SRS — Software Requirements Specification</span></a>
+        <a href="./data-design.html"><span class="label">Reference →</span><span class="title">Data Design — bus schemas</span></a>
+      </div>
+      <div style="margin-top:18px; font-size:11px; color:var(--text-muted); border-top:1px solid var(--border); padding-top:12px">© 2026 pi-harness · Docs built from repo at 2026-09-04 · Theme: community HTML (Inter + JetBrains Mono) · Served at <code class="inline">/docs</code></div>
+    </div>
+  </main>
+</div>
+<script src="./assets/js/docs.js"></script>
+</body>
+</html>

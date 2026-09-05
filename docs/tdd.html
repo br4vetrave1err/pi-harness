@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>TDD — Technical Design Document · Pi-Harness</title>
+<link rel="stylesheet" href="./assets/css/style.css"/>
+</head>
+<body>
+<header class="docs-header">
+  <a class="brand" href="./index.html"><div class="brand-mark">π</div><div class="brand-text"><div class="brand-title">Pi-Harness</div><div class="brand-sub">Docs · TDD v1.0</div></div></a>
+  <nav class="header-nav"><a href="./index.html">Overview</a><a href="./srs.html">SRS</a><a href="./sad.html">SAD</a><a href="./tdd.html" class="active">TDD</a><a href="./test-plan.html">Test Plan</a><a href="./data-design.html">Data Design</a></nav>
+  <div class="header-actions"><div class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input id="docsSearch" placeholder="Search docs…"/></div><a class="btn" href="./index.html">← Hub</a></div>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-section"><div class="sidebar-title">TDD</div><ul class="nav-list">
+      <li><a href="#s1"><span class="nav-icon">1</span> Scope & context</a></li>
+      <li><a href="#s2"><span class="nav-icon">2</span> Component catalog</a></li>
+      <li><a href="#s3"><span class="nav-icon">3</span> Backend (server.js)</a></li>
+      <li><a href="#s4"><span class="nav-icon">4</span> Frontend (App.tsx)</a></li>
+      <li><a href="#s5"><span class="nav-icon">5</span> Substrate & proxy</a></li>
+      <li><a href="#s6"><span class="nav-icon">6</span> CLI mirror</a></li>
+      <li><a href="#s7"><span class="nav-icon">7</span> APIs & sequences</a></li>
+      <li><a href="#s8"><span class="nav-icon">8</span> Workflow</a></li>
+      <li><a href="#s9"><span class="nav-icon">9</span> Errors & bounds</a></li>
+    </ul></div>
+  </aside>
+  <main class="content"><div class="content-inner">
+    <div class="breadcrumbs"><a href="./index.html">Docs</a><span class="sep">/</span><span>TDD</span></div>
+    <div class="doc-label">TDD · Technical Design Document</div>
+    <h1 class="doc-title">Technical Design Document</h1>
+    <p class="doc-subtitle">Buildable detail — every claim points to a file:line. Covers reconciler algorithm, TTL, bounded inspect, dispatch, steer/stop, proxy clamp, and CLI mirror as of <code class="inline">5d55e68</code>.</p>
+    <div class="version-bar"><span class="pill"><strong>TDD 1.0</strong> 2026-09-04</span><span class="pill">Lines: <strong>server.js 676 · App.tsx 930 · dashboard.sh 22KB</strong></span></div>
+
+    <div class="toc"><div class="toc-title">Contents</div><ol>
+      <li><a href="#s1">1 Scope & design constraints</a></li>
+      <li><a href="#s2">2 Component catalog (C0–C9 line map)</a></li>
+      <li><a href="#s3">3 Backend — readFleetStatus, TTL, dispatch, control plane</a></li>
+      <li><a href="#s4">4 Frontend — state, polling, modal, shortcuts</a></li>
+      <li><a href="#s5">5 Substrate — Dockerfile layers, entrypoint tails, proxy patch</a></li>
+      <li><a href="#s6">6 CLI mirror — get_running_agents parity</a></li>
+      <li><a href="#s7">7 API contracts & sequences</a></li>
+      <li><a href="#s8">8 Workflow — coder-tester loop</a></li>
+      <li><a href="#s9">9 Errors, boundedness, config, build</a></li>
+    </ol></div>
+
+    <h2 id="s1">1 — Scope & constraints</h2>
+    <p>This TDD is the implementer’s reference. Invariants here are <strong>must</strong>; anything else is guidance. Host path <code class="inline">E:/projects/pi-harness</code> maps to container <code class="inline">/workspace</code> and session dir <code class="inline">/root/.pi/agent/sessions/--workspace--</code> (<code class="inline">server.js:13</code>).</p>
+    <div class="callout amber"><div class="callout-title">Pinned pins (change requires rebuild)</div><div style="font-size:12.5px; color:var(--text-dim)"><code class="inline">Dockerfile:1 FROM ubuntu:24.04</code> · <code class="inline">ARG NODE_MAJOR=22</code> · <code class="inline">ARG PI_VERSION=0.84.4</code> — layers ordered apt→node→pi→extensions for cache reuse. Infra file changes (<code class="inline">Dockerfile, docker-compose.yml, docker-entrypoint.sh, requirements/package.json</code>) trigger <code class="inline">docker compose up -d --build</code> per <code class="inline">git-sync 167</code>.</div></div>
+
+    <h2 id="s2">2 — Component catalog (line map)</h2>
+    <div class="table-wrap"><table><thead><tr><th>C</th><th>Primary file(s)</th><th>Key lines</th><th>Owned state</th></tr></thead><tbody>
+      <tr><td class="mono">C0</td><td><code class="inline">Dockerfile</code> · <code class="inline">docker-entrypoint.sh</code> · <code class="inline">docker-compose.yml</code></td><td><code class="inline">Dockerfile:1,20,37,91,125</code> · <code class="inline">entrypoint:26,67,119</code> · <code class="inline">compose:35,68</code></td><td>Image layers, volume graph, leases, tail pids</td></tr>
+      <tr><td class="mono">C1</td><td><code class="inline">Dockerfile</code> · <code class="inline">.pi/config.json</code></td><td><code class="inline">Dockerfile:20–40</code> · <code class="inline">config.json:1</code></td><td><code class="inline">pi</code> binary, 4 extensions, model defs</td></tr>
+      <tr><td class="mono">C2</td><td><code class="inline">.pi/agents/coder.md, tester.md</code></td><td><code class="inline">coder.md:1–10</code> · <code class="inline">tester.md:31</code></td><td>Agent cards (frontmatter)</td></tr>
+      <tr><td class="mono">C4</td><td><code class="inline">dashboard/server.js</code></td><td><code class="inline">:25–190</code></td><td>Bus reader (<code class="inline">SUBAGENT_RUNS</code> dir)</td></tr>
+      <tr><td class="mono">C5</td><td><code class="inline">dashboard/server.js</code></td><td><code class="inline">:192–664</code></td><td>Express routes, TTLs, stat aggregation</td></tr>
+      <tr><td class="mono">C6</td><td><code class="inline">dashboard/src/App.tsx</code> · <code class="inline">vite.config.ts</code></td><td><code class="inline">App.tsx:97,124,180,303,353,731</code> · <code class="inline">vite:11</code></td><td>React state (windows, sessions, tabs)</td></tr>
+      <tr><td class="mono">C7</td><td><code class="inline">dashboard.sh</code></td><td><code class="inline">:12,20,57,81,112,251</code></td><td>ANSI buffers, col width</td></tr>
+      <tr><td class="mono">C3</td><td><code class="inline">workflows/coder-tester-loop.js</code></td><td><code class="inline">:9,16,27,41</code></td><td>Rounds state, verdict string</td></tr>
+    </tbody></table></div>
+
+    <h2 id="s3">3 — Backend (<code class="inline">dashboard/server.js</code>)</h2>
+    <h3>3.1 Reconciler <code class="inline">readFleetStatus() :25</code></h3>
+    <pre>inputs:  env SUBAGENT_RUNS, ASYNC_RESULTS; FS dirs under SUBAGENT_RUNS
+steps:
+  1. readdir SUBAGENT_RUNS → dirs (withFileTypes)
+  2. per dir: read status.json → parse JSON
+  3. state = j.state || j.status || 'unknown'
+     agent = j.agent || j.steps[0].agent || workflowKey || 'coder'
+     task  = j.task || j.steps[0].task || runId
+     times: startedAt, lastUpdate, durationMs?
+  4. STALE: if (running||pending && now-lastUpdate>30s) { state=failed; durationMs=lastUpdate-startedAt }
+  5. if durationMs==null → (running? now-startedAt : lastUpdate-startedAt) ; clamp <0→0
+  6. tokens: if object → total||window||input else number; coerce Number()
+  7. tail output-*.log last 8 lines (filter Boolean) → kind by regex; else events.jsonl 5; else info fallback
+  8. map dashboardStatus: running|pending→running, paused→waiting, complete→done, failed|stopped→error
+  9. windowTokens/spentTokens/totalCost/lifecycle… + processTerminal(observed|unknown via process-terminal.json)
+sort: startedAt desc
+output: FleetEntry[]</pre>
+    <div class="callout"><div class="callout-title">Edge behavior (must stay)</div><div style="font-size:12.5px; color:var(--text-dim)"><code class="inline">A. Negative duration clamp 0</code> · <code class="inline">B. String totalTokens → Number()</code> · <code class="inline">C. Malformed status.json skip not throw (catch)</code> · <code class="inline">D. output-*.log tail preserves ts per line (en-GB)</code>.</div></div>
+
+    <h3>3.2 TTL filtering & aggregation</h3>
+    <div class="table-wrap"><table><thead><tr><th>Endpoint</th><th>TTL rule</th><th>Lines</th></tr></thead><tbody>
+      <tr><td><code class="inline">GET /api/fleet</code></td><td><code class="inline">running|waiting always; error &lt;60s; done &lt;30s</code> else hide</td><td><code class="inline">:210</code></td></tr>
+      <tr><td><code class="inline">GET /api/agents</code></td><td>Same TTL, then strict <code class="inline">activeOnly running|waiting</code> double-filter (<code class="inline">App.tsx:520</code>)</td><td><code class="inline">:237</code></td></tr>
+      <tr><td><code class="inline">GET /api/session-stats</code></td><td><code class="inline">totalTokens sum, toolCalls sum, tasksComplete done/total, uptime HH:MM:SS</code></td><td><code class="inline">:278</code></td></tr>
+    </tbody></table></div>
+
+    <h3>3.3 Dispatch <code class="inline">POST /api/dispatch :326</code></h3>
+    <div class="table-wrap"><table><thead><tr><th>Mode</th><th>Steps</th><th>Guard</th></tr></thead><tbody>
+      <tr><td><code class="inline">shell</code></td><td><code class="inline">runId=36+rand4</code> → <code class="inline">mkdir dir → status.json:running + events.jsonl start + output-0.log</code> → <code class="inline">spawn('pi') try + spawn('sh -c … | >> log') fallback</code> both with <code class="inline">on('error')</code> → <code class="inline">setTimeout 8s → status:complete</code></td><td><code class="inline">cleanTask slice 0,2000</code>; <code class="inline">error</code> handler prevents ENOENT crash (<code class="inline">:385</code>)</td></tr>
+      <tr><td><code class="inline">pi</code></td><td><code class="inline">spawn('docker',['exec','-d','pi-personal-agent','pi','-p',`Use ${ag} to ${cleanTask}`]) detached, stdio ignore, unref()</code></td><td>Returns <code class="inline">queued:true mode:pi</code> in ~100 ms; fallback to shell on throw</td></tr>
+    </tbody></table></div>
+
+    <h3>3.4 Control plane</h3>
+    <ul>
+      <li><code class="inline">POST /api/fleet/:id/steer :457</code> writes <code class="inline">supervisor-channels/&lt;runId&gt;.steer.json {runId, mode, message, ts, from:'dashboard'}</code> — <code class="inline">mode ∈ steer|follow_up|auto</code>.</li>
+      <li><code class="inline">POST /api/fleet/:id/stop :476</code> writes <code class="inline">&lt;asyncDir&gt;/stop.requested</code> — honored by <code class="inline">pi-subagents</code> supervisor.</li>
+      <li>All <code class="inline">:id</code> params resolve via <code class="inline">fleet.find(f.id===id||f.runId===id||f.fullId===id)</code> (<code class="inline">:441</code>).</li>
+    </ul>
+
+    <h3>3.5 Bounded inspect & sessions</h3>
+    <ul>
+      <li><code class="inline">GET /api/fleet/:id?lines=200 :439</code> caps <code class="inline">requestedLines ∈[1,200]</code>, <code class="inline">64KB</code> byte bound, <code class="inline">events ∩50</code>, outputs <code class="inline">{transcript:{truncated, totalBytes, maxBytes}, events, artifacts}</code>.</li>
+      <li><code class="inline">GET /api/session/:id :297</code> decode → <code class="inline">basename</code> → <code class="inline">path.normalize → inside SESSIONS_DIR</code> guard → <code class="inline">stat.size>5MB → slice(-500KB)</code> → <code class="inline">Content-Type: application/json</code>.</li>
+    </ul>
+
+    <h3>3.6 Infra — GC & streams</h3>
+    <ul>
+      <li>GC <code class="inline">setInterval 60s :642</code> — removes <code class="inline">failed|complete|stopped|error && now-lastUpdate>10min</code>.</li>
+      <li>SSE <code class="inline">GET /api/fleet/stream :517</code> — <code class="inline">text/event-stream</code>, 1 s retry, hash of <code class="inline">runId:state:lastUpdate</code> + <code class="inline">fs.watch(SUBAGENT_RUNS)</code>.</li>
+    </ul>
+
+    <h2 id="s4">4 — Frontend (<code class="inline">dashboard/src/App.tsx</code>)</h2>
+    <h3>4.1 State & effects</h3>
+    <pre>state:
+  conversations: Session[]|null (null = loading → skeleton)
+  windows: AgentWindow[] (activeOnly)
+  stats: {totalTokens, toolCalls, tasksComplete, uptime}
+  modalAgentId: string|null → modalWin (fleetHit | sessionModalObj) → memo
+effects:
+  tick 1s (Topbar time)
+  fetchAll 1s: Promise.all(sessions, fleet, stats) + lastConversationsJsonRef deep equality guard
+  EventSource /api/fleet/stream → fetchAll on 'fleet' (fallback poll stays)
+  modal session fetch: depends only on modalFile string, AbortController 5s, 2 URL fallback</pre>
+    <h3>4.2 Components</h3>
+    <div class="table-wrap"><table><thead><tr><th>Component</th><th>Lines</th><th>Key prop rule</th></tr></thead><tbody>
+      <tr><td><code class="inline">Topbar</code></td><td><code class="inline">:303</code></td><td>Props <code class="inline">running/waiting/done</code> from <code class="inline">windows</code> not fleet totals</td></tr>
+      <tr><td><code class="inline">Sidebar</code></td><td><code class="inline">:180</code></td><td>Filter chips <code class="inline">ALL/CODER/…</code>; fleet correlation dot via <code class="inline">fleetRunId</code></td></tr>
+      <tr><td><code class="inline">AgentWindowCard</code></td><td><code class="inline">:124</code></td><td><code class="inline">border isActive ? color : #1e2b1e</code>; tail 160px; window/spent dual token display</td></tr>
+      <tr><td><code class="inline">LogLineView</code></td><td><code class="inline">:97</code></td><td><code class="inline">memo</code>; <code class="inline">kind→color/prefix</code>; key <code class="inline">runId-ts-i</code></td></tr>
+      <tr><td><code class="inline">InputBar</code></td><td><code class="inline">:353</code></td><td>Mode <code class="inline">SHELL|PI</code> colors, optimistic <code class="inline">tmp-…</code> 3 s GC</td></tr>
+      <tr><td>Modal 5 tabs</td><td><code class="inline">:731</code></td><td><code class="inline">log|transcript|events|artifacts|session</code>; steer/stop/copy; <code class="inline">x</code> hide tools</td></tr>
+    </tbody></table></div>
+
+    <h2 id="s5">5 — Substrate (<code class="inline">Dockerfile</code> & <code class="inline">docker-entrypoint.sh</code>)</h2>
+    <h3>5.1 Layer order (cache reuse)</h3>
+    <pre>FROM ubuntu:24.04
+  apt (curl, python3, git, bash) → node 22.x → pi@0.84.4 --ignore-scripts
+  pi install npm:pi-freeflow → copy /opt/pi-freeflow → patch proxy 390k + models.ts 390k
+  pi install npm:pi-web-access + pi-subagents → feynman@ /opt/feynman → EXDEV patch
+  COPY .pi/agents/coder.md → /root/.pi + /workspace/.pi  (symlink check sha256)
+  COPY slack_webhook.sh, task_watcher.sh, docker-entrypoint.sh, dashboard.sh → /tools
+  ENV FREEFLOW_LOG_LEVEL=debug, python unbuffered, pi-freeflow-debug.json</pre>
+    <h3>5.2 Proxy dots clamp (idempotent)</h3>
+    <p>Both build-time (<code class="inline">Dockerfile:37</code> Python patch) and runtime (<code class="inline">entrypoint:19</code>) enforce:</p>
+<pre>if isKilo && parsedBody:
+  modelDef = getModelDef(model)
+  safeLimit = min(maxTokens??32000, contextWindow??128000 -1000)
+  atlasCap = model.includes('dots') ? 390000 : safeLimit
+  limit = min(safeLimit, atlasCap)
+  clamp max_completion_tokens, max_tokens ≤ limit
+  also force 390k dots model.maxTokens in models.ts</pre>
+    <h3>5.3 Entrypoint supervision</h3>
+    <ul>
+      <li><code class="inline">tail_with_prefix(file,prefix) :26</code> — <code class="inline">stdbuf -oL tail -n 0 -F</code> loop on missing file, traps SIGTERM, final <code class="inline">wait</code>.</li>
+      <li>Optional <code class="inline">TAIL_SESSIONS=1</code> (<code class="inline">:131</code>), <code class="inline">ENABLE_TASK_WATCHER=1</code> (<code class="inline">:137</code>), <code class="inline">ENABLE_GIT_SYNC=1 interval 15s</code> (<code class="inline">:146</code>), <code class="inline">HEARTBEAT=1 300s</code> (<code class="inline">:201</code>).</li>
+    </ul>
+
+    <h2 id="s6">6 — CLI mirror (<code class="inline">dashboard.sh</code>)</h2>
+    <pre>helpers:
+  get_agent_tag(line)   → grep "agent"
+  format_session_line() → trim 32ch + strip quotes
+  get_running_agents()  → ls $SUBAGENT_RUNS/*/status.json → grep state, agent, totalTokens, durationMs
+  get_fleet_stats()     → sum totalTokens, count run/wait/done
+draw_dashboard():
+  tput cols auto width, max_lines 14, 1s read -t 1 refresh, split 1/4 sessions | 3/4 agents</pre>
+    <div class="callout amber"><div class="callout-title">G1 — must fix</div><div style="font-size:12.5px; color:var(--text-dim)"><code class="inline">dashboard.sh:67 grep '"totalTokens":[0-9]*'</code> fails on object form <code class="inline">{total,window}</code>. TDD requires <code class="inline">jq -r '.totalTokens|if type=="object" then .total // .window else . end'</code> fallback to grep.</div></div>
+
+    <h2 id="s7">7 — API contracts & sequences</h2>
+    <div class="table-wrap"><table><thead><tr><th>Seq</th><th>Trigger</th><th>Calls</th><th>Success</th><th>Error</th></tr></thead><tbody>
+      <tr><td>Dispatch shell</td><td>Enter in InputBar</td><td><code class="inline">POST /dispatch shell → 200 queued runId → 1s poll GET /fleet → card → click → GET /fleet/:id 50L</code></td><td><code class="inline">queued true</code></td><td><code class="inline">400 task required</code></td></tr>
+      <tr><td>Steer</td><td>modal Send s</td><td><code class="inline">POST /fleet/:id/steer → file → pi-subagents delivers → events steer.delivered</code></td><td><code class="inline">queued</code></td><td><code class="inline">404 fleet run not found</code></td></tr>
+      <tr><td>Static session</td><td>LEFT click w/o fleet</td><td><code class="inline">POST /open-session → pi --session … / GET /session/:id → bounded 500KB</code></td><td><code class="inline">200 json</code></td><td><code class="inline">404 not found</code></td></tr>
+      <tr><td>SSE</td><td>Page load</td><td><code class="inline">EventSource /fleet/stream → retry 1000 → event fleet → fetchAll()</code></td><td><code class="inline">text/event-stream</code></td><td>poll fallback</td></tr>
+    </tbody></table></div>
+
+    <h2 id="s8">8 — Workflow (<code class="inline">coder-tester-loop.js</code>)</h2>
+    <pre>args.task → hasFail(s) = s.includes("Test verdict: FAIL")
+coder-1: runs.run("coder-1", {agent:"coder", task: implement+commit rules})
+tester-1: runs.run("tester-1", {agent:"tester", task: read coder1.output + git diff HEAD~1})
+if hasFail(tester1):
+  coder-2 → tester-2 → if hasFail → coder-3 → tester-3 → return {rounds:2|3, final}
+else return {rounds:1, final:tester1}
+catch → {rounds:0, error}</pre>
+    <p>Contracts: coder uses <code class="inline">git add + git commit detailed</code>; tester reads <code class="inline">git diff HEAD~1 + npm test/typecheck</code> and terminates with <code class="inline">Test verdict: PASS/FAIL (or PASS with notes stops)</code> (<code class="inline">tester.md:31–48</code>).</p>
+
+    <h2 id="s9">9 — Errors, boundedness, config, build</h2>
+    <div class="table-wrap"><table><thead><tr><th>Concern</th><th>Rule</th><th>Lines</th></tr></thead><tbody>
+      <tr><td>Spawn crash</td><td><code class="inline">spawn('pi').on('error', ignore+log)</code> + <code class="inline">try/catch</code></td><td><code class="inline">server.js:385</code></td></tr>
+      <tr><td>Fleet unbounded</td><td><code class="inline">lines ≤200 && bytes ≤64KB; events ≤50; sessions ≤5MB</code></td><td><code class="inline">:439, :315</code></td></tr>
+      <tr><td>Traversal</td><td><code class="inline">decodeURIComponent → basename → normalize → prefix check SESSIONS_DIR</code></td><td><code class="inline">:359</code></td></tr>
+      <tr><td>Task truncation</td><td><code class="inline">cleanTask slice 0,2000</code></td><td><code class="inline">:331</code></td></tr>
+      <tr><td>CORS</td><td><code class="inline">Allow-Origin * ; Methods GET,POST,OPTIONS</code></td><td><code class="inline">:19</code></td></tr>
+      <tr><td>Docs static</td><td><code class="inline">app.use('/docs', express.static(docsDir, {index:'index.html'}))</code> before SPA catch-all; dirs: <code class="inline">../docs</code> and <code class="inline">/workspace/docs</code></td><td>this sprint</td></tr>
+      <tr><td>Build</td><td><code class="inline">vite build → dist/</code> · Dockerfile second stage <code class="inline">COPY dist + server.js + copy docs/</code> · <code class="inline">docker compose up -d --build</code></td><td><code class="inline">dashboard/Dockerfile:10</code></td></tr>
+    </tbody></table></div>
+
+    <div class="footer-nav"><a href="./sad.html"><span class="label">← Previous</span><span class="title">SAD — Architecture</span></a><a href="./test-plan.html"><span class="label">Next →</span><span class="title">Test Plan — 97 cases</span></a></div>
+    <div style="margin-top:18px; font-size:11px; color:var(--text-muted); border-top:1px solid var(--border); padding-top:12px">TDD validated against <code class="inline">dashboard/server.js:1–676</code> · <code class="inline">App.tsx:1–930</code> · <code class="inline">Dockerfile</code> · <code class="inline">workflows/coder-tester-loop.js</code>. Served at <code class="inline">/docs/tdd.html</code></div>
+  </div></main>
+</div>
+<script src="./assets/js/docs.js"></script>
+</body>
+</html>

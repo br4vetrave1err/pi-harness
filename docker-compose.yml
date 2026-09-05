@@ -65,9 +65,11 @@ services:
       - DOCKER_API_VERSION=1.44
     profiles: ["watchtower", "auto-update"]  # run with: docker compose --profile auto-update up -d
 
-  # --- Dashboard UI (Figma React design integrated) ---
+  # --- Dashboard UI (Figma React design integrated) — docs baked from repo/docs + volume-mounted for live edits ---
   dashboard:
-    build: ./dashboard
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
     container_name: pi-dashboard
     restart: unless-stopped
     healthcheck:

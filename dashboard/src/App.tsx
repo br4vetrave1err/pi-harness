@@ -385,6 +385,11 @@ function Topbar({ tick, running = 0, waiting = 0, done = 0 }: { tick: number; ru
         </div>
       </div>
       <div className="flex items-center gap-4 text-[10px] text-[#3d5c3d]">
+        <a href="/docs" target="_blank" rel="noreferrer" title="Open docs at /docs (SRS, SAD, TDD, Test Plan, Data Design)" style={{ borderColor: "#39ff6e40", backgroundColor: "#39ff6e14", color: "#39ff6e" }} className="px-2 py-1 border rounded-sm tracking-widest font-semibold hover:bg-[#39ff6e28] transition-colors">DOCS</a>
+        <a href="/docs/srs.html" target="_blank" rel="noreferrer" className="hidden sm:inline hover:text-[#6b9b6b]">SRS</a>
+        <a href="/docs/sad.html" target="_blank" rel="noreferrer" className="hidden sm:inline hover:text-[#6b9b6b]">SAD</a>
+        <a href="/docs/data-design.html" target="_blank" rel="noreferrer" className="hidden lg:inline hover:text-[#6b9b6b]">DATA</a>
+        <span style={{ color: "#1e2b1e" }} className="hidden sm:inline">│</span>
         <span>
           cpu <span className="text-[#6b9b6b]">12%</span>
         </span>

@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>SRS — Software Requirements Specification · Pi-Harness</title>
+<link rel="stylesheet" href="./assets/css/style.css"/>
+</head>
+<body>
+<header class="docs-header">
+  <a class="brand" href="./index.html"><div class="brand-mark">π</div><div class="brand-text"><div class="brand-title">Pi-Harness</div><div class="brand-sub">Docs · SRS v1.0</div></div></a>
+  <nav class="header-nav"><a href="./index.html">Overview</a><a href="./srs.html" class="active">SRS</a><a href="./sad.html">SAD</a><a href="./tdd.html">TDD</a><a href="./test-plan.html">Test Plan</a><a href="./data-design.html">Data Design</a></nav>
+  <div class="header-actions"><div class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input id="docsSearch" placeholder="Search docs…"/></div><a class="btn" href="./index.html">← Hub</a></div>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-section"><div class="sidebar-title">SRS</div><ul class="nav-list">
+      <li><a href="#s1"><span class="nav-icon">1</span> Introduction</a></li>
+      <li><a href="#s2"><span class="nav-icon">2</span> Overall Description</a></li>
+      <li><a href="#s3"><span class="nav-icon">3</span> Functional Reqs</a></li>
+      <li><a href="#s4"><span class="nav-icon">4</span> Non-functional</a></li>
+      <li><a href="#s5"><span class="nav-icon">5</span> Interfaces</a></li>
+      <li><a href="#s6"><span class="nav-icon">6</span> Use Cases</a></li>
+      <li><a href="#s7"><span class="nav-icon">7</span> Traceability</a></li>
+      <li><a href="#app"><span class="nav-icon">A</span> Appendix</a></li>
+    </ul></div>
+    <div class="sidebar-section" style="font-size:11px; color:var(--text-muted); padding:0 6px">IEEE 830-1998 style. Axioms T1–T9 from <code class="inline">TASKS.md:2</code>. Invariants are <strong>must</strong>, qualities <strong>should</strong>.</div>
+  </aside>
+  <main class="content"><div class="content-inner">
+    <div class="breadcrumbs"><a href="./index.html">Docs</a><span class="sep">/</span><span>SRS</span></div>
+    <div class="doc-label">SRS · Software Requirements Specification · IEEE 830</div>
+    <h1 class="doc-title">Software Requirements Specification</h1>
+    <p class="doc-subtitle">Normative requirements for Pi-Harness — fleet observability harness for pi-coding-agent. Derived from codebase at <code class="inline">5d55e68</code> and 22 commits (2026-09-03–04). Every requirement is falsifiable via a <code class="inline">Verify</code> command in <code class="inline">TASKS.md:5</code>.</p>
+    <div class="version-bar"><span class="pill"><strong>SRS 1.0</strong> 2026-09-04</span><span class="pill">Status: <strong>Approved</strong> (from git history)</span><span class="pill">Scope: <strong>Fleet + Dashboards + Workflows</strong></span><span class="status-badge ok">● implements specs</span></div>
+
+    <div class="toc"><div class="toc-title">Table of Contents</div><ol>
+      <li><a href="#s1">1 Introduction — Purpose, Scope, Definitions, References, Overview</a></li>
+      <li><a href="#s2">2 Overall Description — Perspective, Functions, Users, Constraints, Assumptions</a></li>
+      <li><a href="#s3">3 Specific Requirements — Functional (FR-1 … FR-9)</a></li>
+      <li><a href="#s4">4 Non-functional Requirements — Performance, Reliability, Security, Usability</a></li>
+      <li><a href="#s5">5 External Interface Requirements</a></li>
+      <li><a href="#s6">6 Use Cases & Scenarios (U1–U8)</a></li>
+      <li><a href="#s7">7 Traceability to Architecture & Tests</a></li>
+      <li><a href="#app">Appendix — Axioms, Glossary, Revision</a></li>
+    </ol></div>
+
+    <h2 id="s1">1 — Introduction</h2>
+    <h3 id="s1-1">1.1 Purpose</h3>
+    <p>This SRS defines what Pi-Harness must do regardless of implementation language. It is the acceptance contract: if any <strong>must</strong> statement fails, the system does no useful work (axioms T1–T9, <code class="inline">TASKS.md:2</code>).</p>
+    <h3 id="s1-2">1.2 Scope</h3>
+    <p>Pi-Harness is a <strong>deterministic Docker harness</strong> that runs a main <code class="inline">pi-personal-agent</code> container and a fleet of detached pi subagents, exposing their lifecycle via a shared filesystem bus to two renderers (Web and TTY). Out of scope: LLM training, hosted queue, or external orchestrator — workflow is a JS <code class="inline">runs.run()</code> sequence.</p>
+    <h3 id="s1-3">1.3 Definitions & acronyms</h3>
+    <div class="table-wrap"><table><thead><tr><th>Term</th><th>Definition</th><th>Source</th></tr></thead><tbody>
+      <tr><td class="mono">Fleet bus</td><td>Directory <code class="inline">/tmp/pi-subagents-uid-0/async-subagent-runs/&lt;runId&gt;/</code> with <code class="inline">status.json/events.jsonl/output-*.log/process-terminal.json</code></td><td><code class="inline">TASKS.md:4</code> · <code class="inline">server.js:25</code></td></tr>
+      <tr><td class="mono">Reconciler</td><td><code class="inline">readFleetStatus()</code> that maps raw bus → <code class="inline">dashboardStatus running|waiting|done|error</code></td><td><code class="inline">server.js:96</code></td></tr>
+      <tr><td class="mono">Medium windows</td><td>Middle 3/4 grid of <code class="inline">AgentWindowCard</code> (active agents)</td><td><code class="inline">App.tsx:124</code></td></tr>
+      <tr><td class="mono">Stale guard</td><td><code class="inline">running + lastUpdate+30s &lt; now → failed (frozen duration)</code></td><td><code class="inline">server.js:49</code></td></tr>
+      <tr><td class="mono">TTL</td><td>Visibility windows: <code class="inline">error 60s, done 30s</code> else <code class="inline">running|waiting always</code></td><td><code class="inline">server.js:210</code></td></tr>
+      <tr><td class="mono">pi-freeflow</td><td>Proxy to Kilo gateway; clamps <code class="inline">max_completion_tokens ≤ 390k (dots)</code></td><td><code class="inline">Dockerfile:37</code></td></tr>
+    </tbody></table></div>
+    <h3 id="s1-4">1.4 References</h3>
+    <ul>
+      <li><code class="inline">PLAN-fleet-sync.md</code> — desired sync (HTTP ≡ TTY, single bus)</li>
+      <li><code class="inline">PLAN-fleet-observability-UI.md</code> — observability table, 5-tab inspector, windows</li>
+      <li><code class="inline">TASKS.md</code> — first-principles DAG, component invariants, 33 tasks</li>
+      <li><code class="inline">TEST_COVERAGE_PLAN.md</code> — 97 falsifiable cases (67U/22I/8E2E), fixtures</li>
+      <li><code class="inline">dashboard/server.js:1–676</code>, <code class="inline">dashboard/src/App.tsx:1–930</code>, <code class="inline">dashboard.sh</code>, <code class="inline">Dockerfile</code>, <code class="inline">docker-compose.yml</code></li>
+    </ul>
+    <h3 id="s1-5">1.5 Overview</h3>
+    <p>§2 gives product context; §3 enumerates functional requirements grouped by component C0–C9; §4 quality attributes; §5 interfaces; §6 use cases; §7 traceability matrix.</p>
+
+    <h2 id="s2">2 — Overall Description</h2>
+    <h3>2.1 Product perspective</h3>
+    <p>Pi-Harness wraps <code class="inline">pi</code> (0.84.4) without forking it. Interaction: host <code class="inline">E:/projects/pi-harness</code> ↔ volumes ↔ containers <code class="inline">pi-personal-agent</code> + <code class="inline">pi-dashboard</code> (+ optional <code class="inline">git-sync</code>). No DB; file tailing + SSE/poll is the transport.</p>
+    <div class="diagram"><pre>Host files ──volume──► Containers (ubuntu:24.04, node22) ── tail/logs ──► docker logs
+         │                        ├─ pi-freeflow proxy :390k clamp
+         └─ git push ──► GHCR (docker-ci.yml) ── Watchtower/git-sync ──► redeploy</pre></div>
+    <h3>2.2 Product functions</h3>
+    <ul>
+      <li><strong>Fleet</strong>: spawn, observe, steer, stop, and GC subagents via bus files.</li>
+      <li><strong>Dual visibility</strong>: Web React and Bash TTY render the same counts/lines within one poll tick.</li>
+      <li><strong>Orchestration</strong>: coder→tester loop, 3-round cap, tester reads <code class="inline">git diff HEAD~1</code> not coder narrative.</li>
+      <li><strong>Safety</strong>: proxy clamp, bounded inspect (64KB/200), path traversal block, 5 MB session guard.</li>
+      <li><strong>Auto-update</strong>: buildx GHCR + Watchtower/git-sync (infra change requires rebuild).</li>
+    </ul>
+    <h3>2.3 User characteristics</h3>
+    <div class="table-wrap"><table><thead><tr><th>Actor</th><th>Skill</th><th>Surface</th><th>Goal</th></tr></thead><tbody>
+      <tr><td>Operator</td><td>Docker, bash</td><td>CLI <code class="inline">dashboard.sh</code> · <code class="inline">docker logs</code></td><td>Restart, watch logs, confirm fleet empty/hotfix</td></tr>
+      <tr><td>Developer</td><td>React/Express</td><td>Web <code class="inline">:3000</code>/Vite <code class="inline">:5173</code></td><td>Dispatch, steer, inspect 5 tabs, copy <code class="inline">pi --session</code></td></tr>
+      <tr><td>Coder agent</td><td>LLM</td><td><code class="inline">default.subagent</code></td><td>Implement, verify, commit, report</td></tr>
+      <tr><td>Tester agent</td><td>LLM</td><td>Leaf (no subagents)</td><td>Independent FAIL/PASS with file:line proof</td></tr>
+    </tbody></table></div>
+    <h3>2.4 Constraints</h3>
+    <ul>
+      <li>Pinned substrate: <code class="inline">ubuntu:24.04, node 22.x, pi 0.84.4</code> (<code class="inline">Dockerfile:1</code> deterministic).</li>
+      <li>LLM model <code class="inline">freeflow/dots-studio/dots-3-note-preview:free</code> advertised 512k → must clamp 390k (empirical <code class="inline">Dockerfile:37</code>).</li>
+      <li>BusyBox/Alpine <code class="inline">sh</code> not <code class="inline">bash</code> for dispatch fallback (<code class="inline">server.js:398</code>).</li>
+      <li>Host <code class="inline">E:/projects/pi-harness</code> mount is Windows path; inner paths are POSIX.</li>
+    </ul>
+    <h3>2.5 Assumptions & dependencies</h3>
+    <ul>
+      <li><code class="inline">/var/run/docker.sock</code> mounted so <code class="inline">pi-dashboard</code> can <code class="inline">docker exec pi-personal-agent pi …</code> for PI dispatch (fallback is shell mock).</li>
+      <li><code class="inline">pi-subagents</code> volume is shared; GC does not delete active runs.</li>
+      <li>Git remote <code class="inline">@{u}</code> exists for git-sync rev-parse.</li>
+    </ul>
+
+    <h2 id="s3">3 — Specific Requirements (Functional)</h2>
+    <div class="callout"><div class="callout-title">Conformance keyword</div><div style="font-size:12.5px; color:var(--text-dim)"><strong>must</strong> = failure is P0 bug. <strong>should</strong> = quality target with test threshold.</div></div>
+
+    <h3>FR-1 Fleet bus — the source of truth (T1,T4)</h3>
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Requirement</th><th>Verify</th></tr></thead><tbody>
+      <tr><td class="mono">FR-1.1</td><td>After any <code class="inline">runs.run({agent, task})</code>, artifacts <code class="inline">status.json, events.jsonl, output-0.log</code> must appear within 3 s under <code class="inline">…/async-subagent-runs/&lt;runId&gt;/</code></td><td><code class="inline">TASKS.md:C4-P1-01</code></td></tr>
+      <tr><td class="mono">FR-1.2</td><td><code class="inline">status.json</code> must contain fields per schema §Data Design: <code class="inline">runId, sessionId, mode, state, startedAt, lastUpdate, endedAt, durationMs, cwd, asyncDir, sessionFile, totalTokens{window,total,…}, totalCost, model, toolCount, turnCount, launchResolvedExtensions, runtimeAcknowledgedExtensions, children[]</code></td><td><code class="inline">PLAN-obs:18</code></td></tr>
+      <tr><td class="mono">FR-1.3</td><td>Reconciler must map <code class="inline">state running|pending→running, paused→waiting, complete→done, failed|stopped→error</code> deterministically (<code class="inline">server.js:96</code>)</td><td><code class="inline">U-C4-04..06</code></td></tr>
+      <tr><td class="mono">FR-1.4</td><td>Stale guard must fire: <code class="inline">state running|pending && now-lastUpdate &gt; 30s ⇒ failed (duration frozen to lastUpdate-startedAt)</code> (<code class="inline">server.js:49</code>)</td><td><code class="inline">U-C4-07</code></td></tr>
+      <tr><td class="mono">FR-1.5</td><td><code class="inline">totalTokens</code> object vs number must normalize: <code class="inline">object.total → tokens, object.window → windowTokens, sum fallback</code> (<code class="inline">server.js:60</code>)</td><td><code class="inline">U-C4-11</code></td></tr>
+      <tr><td class="mono">FR-1.6</td><td><code class="inline">process-terminal.json</code> proof must be <code class="inline">observed | unknown</code> (never infer from <code class="inline">endedAt</code>)</td><td><code class="inline">server.js:118</code></td></tr>
+    </tbody></table></div>
+
+    <h3>FR-2 Backend projection (<code class="inline">dashboard/server.js</code>, T4,T6,T7)</h3>
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Requirement</th><th>Endpoint</th></tr></thead><tbody>
+      <tr><td class="mono">FR-2.1</td><td><code class="inline">GET /api/fleet</code> must return <code class="inline">{fleet,count,total,timestamp,source,filtered}</code> with TTL <code class="inline">error 60s, done 30s, running|waiting always</code></td><td><code class="inline">:203</code></td></tr>
+      <tr><td class="mono">FR-2.2</td><td><code class="inline">GET /api/agents</code> must use identical TTL and may fallback <code class="inline">?fallback=true → 2 mocks</code></td><td><code class="inline">:230</code></td></tr>
+      <tr><td class="mono">FR-2.3</td><td><code class="inline">GET /api/sessions</code> must emit 20 newest <code class="inline">mtime desc</code> with <code class="inline">fleetRunId/fleetState</code> correlation map</td><td><code class="inline">:175</code></td></tr>
+      <tr><td class="mono">FR-2.4</td><td><code class="inline">GET /api/session/:id</code> must guard traversal, enforce 5 MB → 500 KB slice, <code class="inline">Content-Type: application/json</code></td><td><code class="inline">:315</code></td></tr>
+      <tr><td class="mono">FR-2.5</td><td><code class="inline">POST /api/dispatch</code> must offer <code class="inline">mode shell|pi</code>: shell creates unique <code class="inline">runId Date.now+rand</code> + writes <code class="inline">status.json/events.jsonl</code>; PI uses <code class="inline">docker exec -d … detatched+ignore+unref</code> never blocking</td><td><code class="inline">:326</code></td></tr>
+      <tr><td class="mono">FR-2.6</td><td><code class="inline">POST /api/fleet/:id/steer</code> must write <code class="inline">supervisor-channels/&lt;runId&gt;.steer.json {runId,mode,message,ts,from:'dashboard'}</code> with enum <code class="inline">steer|follow_up|auto</code></td><td><code class="inline">:457</code></td></tr>
+      <tr><td class="mono">FR-2.7</td><td><code class="inline">POST /api/fleet/:id/stop</code> must write <code class="inline">stop.requested</code> (<code class="inline">:484</code>)</td><td><code class="inline">:476</code></td></tr>
+      <tr><td class="mono">FR-2.8</td><td><code class="inline">GET /api/fleet/:id?lines=200</code> must bound 64 KB/200, <code class="inline">events ∩ 50</code>, flag <code class="inline">truncated</code></td><td><code class="inline">:439</code></td></tr>
+      <tr><td class="mono">FR-2.9</td><td>Docs must be served at <code class="inline">/docs</code> without blocking <code class="inline">/api</code> or SPA fallback</td><td>this sprint</td></tr>
+    </tbody></table></div>
+
+    <h3>FR-3 Web frontend (T7, <code class="inline">App.tsx</code>)</h3>
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Requirement</th><th>Loc</th></tr></thead><tbody>
+      <tr><td class="mono">FR-3.1</td><td>Null-is-loading guard <code class="inline">conversations===null → skeleton</code> must prevent FALLBACK flash (<code class="inline">:445</code>)</td><td><code class="inline">:196</code></td></tr>
+      <tr><td class="mono">FR-3.2</td><td>Topbar must count <code class="inline">running/waiting/done from windows</code> and tick 1 s</td><td><code class="inline">:303</code></td></tr>
+      <tr><td class="mono">FR-3.3</td><td>Sidebar correlation <code class="inline">fleetBySession</code> highlight dot; click opens fleet modal or <code class="inline">__session_&lt;id&gt;</code> static</td><td><code class="inline">:180</code></td></tr>
+      <tr><td class="mono">FR-3.4</td><td>Medium grid must double-filter <code class="inline">activeOnly running|waiting</code> after backend TTL; empty <code class="inline">No active agents …</code> vs <code class="inline">Loading fleet…</code></td><td><code class="inline">:520</code></td></tr>
+      <tr><td class="mono">FR-3.5</td><td>InputBar must toggle <code class="inline">SHELL|PI</code>, 5 agent chips, optimistic <code class="inline">tmp-&lt;Date.now&gt;</code> card with 3 s GC</td><td><code class="inline">:714</code></td></tr>
+      <tr><td class="mono">FR-3.6</td><td>Fleet modal 5 tabs <code class="inline">log|transcript|events|artifacts|session</code> must render without crash; shortcuts <code class="inline">f/?/Esc/x/j/k</code> must not fire in <code class="inline">INPUT</code></td><td><code class="inline">:731</code></td></tr>
+      <tr><td class="mono">FR-3.7</td><td>Session transcript fetch must be bounded 120 lines, abort 5 s, 2-URL fallback, per <code class="inline">App.tsx:579</code></td><td><code class="inline">:579</code></td></tr>
+    </tbody></table></div>
+
+    <h3>FR-4 CLI dashboard (<code class="inline">dashboard.sh</code>, T4,T7)</h3>
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Requirement</th></tr></thead><tbody>
+      <tr><td class="mono">FR-4.1</td><td>Must mirror reconciler fields (object totalTokens fallback via <code class="inline">jq</code> or <code class="inline">grep -P</code>) and TTLs or bug G1 is spec fail</td></tr>
+      <tr><td class="mono">FR-4.2</td><td><code class="inline">get_running_agents()</code> + <code class="inline">get_fleet_stats()</code> must stay within ±1 count of <code class="inline">GET /api/fleet</code></td></tr>
+      <tr><td class="mono">FR-4.3</td><td><code class="inline">draw_dashboard</code> must respect <code class="inline">tput cols</code>, max 14 lines, 1 s <code class="inline">read -t 1</code></td></tr>
+    </tbody></table></div>
+
+    <h3>FR-5 Agents & workflow (T2,T5)</h3>
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Requirement</th><th>File</th></tr></thead><tbody>
+      <tr><td class="mono">FR-5.1</td><td><code class="inline">coder.md</code> must include <code class="inline">default.subagent, inheritProjectContext:true, defaultContext:fork, thinking:xhigh, timeout 600s</code></td><td><code class="inline">.pi/agents/coder.md:4</code></td></tr>
+      <tr><td class="mono">FR-5.2</td><td><code class="inline">tester.md</code> must forbid <code class="inline">default.subagent</code> (leaf) and include <code class="inline">Test verdict: PASS/FAIL</code> template</td><td><code class="inline">tester.md:34</code></td></tr>
+      <tr><td class="mono">FR-5.3</td><td><code class="inline">coder-tester-loop.js</code> must branch only on <code class="inline">hasFail includes "Test verdict: FAIL"</code> (PASS with notes stops), cap 3 rounds, returns <code class="inline">{rounds,final}</code></td><td><code class="inline">workflows/…:9</code></td></tr>
+      <tr><td class="mono">FR-5.4</td><td>Prompt workflow <code class="inline">.pi/prompts/coder-tester-loop.md</code> must stay aligned to JS cap/branching</td><td><code class="inline">.pi/prompts/…:9</code></td></tr>
+    </tbody></table></div>
+
+    <h3>FR-6 Substrate & proxy (T3,T8,T9)</h3>
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Requirement</th></tr></thead><tbody>
+      <tr><td class="mono">FR-6.1</td><td>Proxy must clamp <code class="inline">max_completion_tokens / max_tokens ≤ min(model.maxTokens, contextWindow-1000, 390k dots)</code> (<code class="inline">Dockerfile:37</code> + <code class="inline">entrypoint 19</code> runtime patch)</td></tr>
+      <tr><td class="mono">FR-6.2</td><td>Image must pin <code class="inline">ubuntu:24.04, node 22, pi 0.84.4</code> and bake <code class="inline">coder.md</code> to <code class="inline">/root/.pi/agent/agents/</code> + <code class="inline">/workspace/.pi/agents/</code> (<code class="inline">Dockerfile:91</code>)</td></tr>
+      <tr><td class="mono">FR-6.3</td><td>Entrypoint must tail <code class="inline">pi-freeflow.log</code> to <code class="inline">docker logs</code>, trap SIGTERM, heartbeat 300 s, optional git-sync/task_watcher</td></tr>
+      <tr><td class="mono">FR-6.4</td><td>Compose volumes <code class="inline">/workspace, .pi, pi-subagents</code> must survive <code class="inline">docker compose down</code> (not <code class="inline">down -v</code>)</td></tr>
+    </tbody></table></div>
+
+    <h2 id="s4">4 — Non-functional Requirements</h2>
+    <div class="table-wrap"><table><thead><tr><th>Category</th><th>ID</th><th>Requirement</th><th>Metric</th></tr></thead><tbody>
+      <tr><td>Performance</td><td class="mono">NFR-1</td><td><code class="inline">readFleetStatus()</code> with 100 dirs must complete &lt; 80 ms p95</td><td><code class="inline">NF-02</code></td></tr>
+      <tr><td>Performance</td><td class="mono">NFR-2</td><td>Card appears &lt; 200 ms optimistic, fleet-visible &lt; 3 s (poll) or &lt; 200 ms SSE</td><td>E2E-01</td></tr>
+      <tr><td>Reliability</td><td class="mono">NFR-3</td><td>Spawn ENOENT (<code class="inline">pi</code> missing) must not crash server — guarded handler (<code class="inline">server.js:385</code>)</td><td><code class="inline">NF-03</code></td></tr>
+      <tr><td>Reliability</td><td class="mono">NFR-4</td><td>Stale GC: completed/failed older than 10 min must be removed from FS (<code class="inline">server.js:642 GC_TTL</code>)</td><td>C0-P4-02</td></tr>
+      <tr><td>Security</td><td class="mono">NFR-5</td><td>Dispatch <code class="inline">task</code> must be capped 2000 ch, <code class="inline">steer message</code> scoped, session <code class="inline">path.normalize → inside SESSIONS_DIR</code></td><td><code class="inline">I-C5-12</code></td></tr>
+      <tr><td>Usability</td><td class="mono">NFR-6</td><td>Dashboard must not flash FALLBACK on refresh (null-is-loading), memo <code class="inline">LogLineView</code> to avoid 500 ms full remount</td><td><code class="inline">App.tsx:4</code></td></tr>
+      <tr><td>Observability</td><td class="mono">NFR-7</td><td><code class="inline">docker logs</code> must emit <code class="inline">[dashboard-api] dispatch/steer/stop</code> + heartbeat</td><td><code class="inline">NF-04</code></td></tr>
+    </tbody></table></div>
+
+    <h2 id="s5">5 — External Interface Requirements</h2>
+    <h3>5.1 User interfaces</h3>
+    <ul>
+      <li>Web SPA at <code class="inline">http://localhost:3000</code> (prod) / <code class="inline">:5173</code> (Vite) — <code class="inline">Topbar, Sidebar, AgentWindowCard, LogLineView, InputBar, modal 5 tabs, ? help</code>.</li>
+      <li>TTY at <code class="inline">bash dashboard.sh</code> — split 1/4 sessions | 3/4 agents, stats row, 1 s refresh, <code class="inline">q</code> drop to bash.</li>
+      <li>Docs at <code class="inline">/docs</code> — static HTML with same header style; SPA fallback must not intercept.</li>
+    </ul>
+    <h3>5.2 Programmatic interfaces (REST)</h3>
+    <div class="table-wrap"><table><thead><tr><th>Method</th><th>Path</th><th>Contract</th></tr></thead><tbody>
+      <tr><td>GET</td><td class="mono">/api/fleet[?all=true]</td><td>TTL-filtered fleet</td></tr>
+      <tr><td>GET</td><td class="mono">/api/agents</td><td>Active-only projection (+ fallback)</td></tr>
+      <tr><td>GET</td><td class="mono">/api/sessions</td><td>20 newest + correlation</td></tr>
+      <tr><td>GET</td><td class="mono">/api/session/:id</td><td>Bounded session file</td></tr>
+      <tr><td>GET</td><td class="mono">/api/session-stats</td><td>Aggregated tokens/calls/tasks/uptime</td></tr>
+      <tr><td>GET</td><td class="mono">/api/fleet/:id[?lines=200]</td><td>Single run bounded</td></tr>
+      <tr><td>GET</td><td class="mono">/api/fleet/stream</td><td>SSE <code class="inline">text/event-stream</code></td></tr>
+      <tr><td>POST</td><td class="mono">/api/dispatch</td><td>{agent, task, mode}</td></tr>
+      <tr><td>POST</td><td class="mono">/api/fleet/:id/steer</td><td>{message, mode}</td></tr>
+      <tr><td>POST</td><td class="mono">/api/fleet/:id/stop</td><td>marker</td></tr>
+      <tr><td>POST</td><td class="mono">/api/open-session</td><td>{file,agentId,runId} → pi cmd</td></tr>
+      <tr><td>GET</td><td class="mono">/docs/*</td><td>Static docs (new)</td></tr>
+    </tbody></table></div>
+    <h3>5.3 System ↔ external</h3>
+    <ul>
+      <li>Kilo gateway via <code class="inline">pi-freeflow</code> proxy (Bearer <code class="inline">kilo-free</code>) — config in <code class="inline">.pi/config.json:1</code>.</li>
+      <li>Docker socket for PI dispatch; GitHub GHCR <code class="inline">ghcr.io/&lt;owner&gt;/pi-harness:latest</code> via <code class="inline">.github/workflows/docker-ci.yml:12</code>.</li>
+      <li>Slack webhook optional <code class="inline">SLACK_WEBHOOK_URL</code> for watcher.</li>
+    </ul>
+
+    <h2 id="s6">6 — Use Cases</h2>
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Title</th><th>Actor</th><th>Flow</th><th>Accept</th></tr></thead><tbody>
+      <tr><td class="mono">U1</td><td>Dispatch & watch</td><td>Dev</td><td>InputBar SHELL <code class="inline">echo hi</code> → optimistic card → fleet poll → modal live log</td><td>E2E-01 &lt;3 s</td></tr>
+      <tr><td class="mono">U2</td><td>Static transcript</td><td>Dev</td><td>LEFT click session without fleet → fetch <code class="inline">/api/session/:id</code> → log tab bounded</td><td>E2E-02</td></tr>
+      <tr><td class="mono">U3</td><td>Inspector tabs</td><td>Dev</td><td>Press <code class="inline">f</code> → cycle 5 tabs without crash</td><td>E2E-03</td></tr>
+      <tr><td class="mono">U4</td><td>Steer</td><td>Dev</td><td>Running <code class="inline">sleep 20</code> → type steer <code class="inline">focus scope</code> → Send → file + events</td><td>E2E-04</td></tr>
+      <tr><td class="mono">U5</td><td>Stop</td><td>Dev</td><td><code class="inline">D</code> stop → <code class="inline">stop.requested</code> → state <code class="inline">stopped|failed</code></td><td>E2E-05</td></tr>
+      <tr><td class="mono">U6</td><td>Dual mode dispatch</td><td>Dev</td><td>SHELL + PI toggles visible, colors <code class="inline">#39ff6e vs #4da6ff</code></td><td>E2E-06</td></tr>
+      <tr><td class="mono">U7</td><td>Coder-tester loop</td><td>Orchestrator</td><td><code class="inline">subagent workflowScriptPath</code> → coder-1 commit → tester-1 FAIL → coder-2 fix … cap 3</td><td>U-C3</td></tr>
+      <tr><td class="mono">U8</td><td>Browse docs</td><td>Any</td><td>Open <code class="inline">/docs</code> → nav SRS/SAD/TDD/Test/Data</td><td>FR-2.9</td></tr>
+    </tbody></table></div>
+
+    <h2 id="s7">7 — Traceability</h2>
+    <div class="table-wrap"><table><thead><tr><th>Plan spec</th><th>SRS §</th><th>SAD comp</th><th>TDD §</th><th>Tests</th></tr></thead><tbody>
+      <tr><td><code class="inline">PLAN-fleet-sync §3</code></td><td>FR-2.1, FR-4</td><td>C5,C7</td><td>§3 backend</td><td><code class="inline">I-C5-01, I-C7-01</code></td></tr>
+      <tr><td><code class="inline">PLAN-obs §3.1 layout</code></td><td>FR-3</td><td>C6</td><td>§4 frontend</td><td><code class="inline">E2E-01..03</code></td></tr>
+      <tr><td><code class="inline">PLAN-obs §3.4 window/spent</code></td><td>FR-1.5</td><td>C4</td><td>§3.3</td><td><code class="inline">U-C4-11, I-C5-08</code></td></tr>
+      <tr><td><code class="inline">TASKS T3 proxy</code></td><td>FR-6.1</td><td>C1</td><td>§5 proxy</td><td><code class="inline">C1-P0-05</code></td></tr>
+      <tr><td><code class="inline">Workflow cap 3</code></td><td>FR-5.3</td><td>C3</td><td>§8</td><td><code class="inline">U-C3</code></td></tr>
+    </tbody></table></div>
+
+    <h2 id="app">Appendix</h2>
+    <h3>A — Axioms cross-ref</h3>
+    <p>T1 durable bus · T2 agent MD · T3 proxy clamp · T4 file-bus · T5 workflow deterministic · T6 projection read-only · T7 dual surface same truth · T8 volume vs rebuild · T9 tail/poll observers. (<code class="inline">TASKS.md:2</code>)</p>
+    <h3>B — Revision</h3>
+    <div class="table-wrap"><table><thead><tr><th>Rev</th><th>Date</th><th>Change</th><th>Git</th></tr></thead><tbody>
+      <tr><td>0.1</td><td>2026-09-03</td><td>Initial substrate + agents + loops</td><td><code class="inline">ecbce48…0a13753</code></td></tr>
+      <tr><td>0.9</td><td>2026-09-04</td><td>Fleet TTL, bounded, CLI parity, web sync, SSE, hardening, E2E suite</td><td><code class="inline">46e558f…68e9245</code></td></tr>
+      <tr><td>1.0</td><td>2026-09-04</td><td>Docs HTML on /docs (this file)</td><td><code class="inline">this sprint</code></td></tr>
+    </tbody></table></div>
+
+    <div class="footer-nav"><a href="./index.html"><span class="label">← Previous</span><span class="title">Hub — Overview</span></a><a href="./sad.html"><span class="label">Next →</span><span class="title">SAD — Architecture (4+1)</span></a></div>
+    <div style="margin-top:18px; font-size:11px; color:var(--text-muted); border-top:1px solid var(--border); padding-top:12px">SRS generated from <code class="inline">TASKS.md</code> + <code class="inline">TEST_COVERAGE_PLAN.md</code> + code. Served at <code class="inline">/docs/srs.html</code></div>
+  </div></main>
+</div>
+<script src="./assets/js/docs.js"></script>
+</body>
+</html>

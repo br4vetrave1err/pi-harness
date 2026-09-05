@@ -662,15 +662,47 @@ setInterval(() => {
   } catch {}
 }, 60000);
 
+// ---- Docs static (community HTML at /docs) — must be before SPA catch-all ----
+const DOCS_CANDIDATES = [
+  path.join(__dirname, 'dist', 'docs'),
+  path.join(__dirname, '..', 'docs'),
+  path.join(__dirname, '..', '..', 'docs'),
+  '/workspace/docs',
+  path.resolve('/workspace/docs'),
+];
+let DOCS_DIR = null;
+for (const p of DOCS_CANDIDATES) { try { if (fs.existsSync(p) && fs.statSync(p).isDirectory()) { DOCS_DIR = p; break; } } catch {} }
+if (DOCS_DIR) {
+  console.log(`[dashboard-api] serving docs from ${DOCS_DIR} at /docs`);
+  app.use('/docs', express.static(DOCS_DIR, { index: 'index.html', extensions: ['html'] }));
+  // SPA fallback must NOT intercept /docs or /api
+  app.get('/docs*', (req, res, next) => {
+    const file = path.join(DOCS_DIR, req.path.replace(/^\/docs\/?/, '') || 'index.html');
+    if (fs.existsSync(file) && fs.statSync(file).isFile()) return res.sendFile(file);
+    const idx = path.join(DOCS_DIR, 'index.html');
+    if (fs.existsSync(idx)) return res.sendFile(idx);
+    return next();
+  });
+} else {
+  console.log(`[dashboard-api] docs dir not found (checked ${DOCS_CANDIDATES.join(', ')})`);
+}
+
 if (fs.existsSync(DIST)) {
   app.use(express.static(DIST));
   app.get('*', (req, res) => {
-    if (req.path.startsWith('/api')) return res.status(404).json({error:'not found'});
+    if (req.path.startsWith('/api') || req.path.startsWith('/docs')) return res.status(404).json({error:'not found'});
     res.sendFile(path.join(DIST, 'index.html'));
+  });
+} else {
+  // Dev without DIST — SPA fallback for API/docs only; vite handles frontend
+  app.get('*', (req, res) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/docs')) return res.status(404).json({error:'not found'});
+    return res.status(404).send('not found — run vite dev on :5173 or build dist/');
   });
 }
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[dashboard-api] listening on http://0.0.0.0:${PORT}`);
   console.log(`[dashboard-api] SESSIONS_DIR=${SESSIONS_DIR} fleet=${SUBAGENT_RUNS}`);
   if (fs.existsSync(DIST)) console.log(`[dashboard-api] serving static from ${DIST}`);
+  if (DOCS_DIR) console.log(`[dashboard-api] docs available at http://0.0.0.0:${PORT}/docs`);
 });

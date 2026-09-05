@@ -30,3 +30,8 @@ Thumbs.db
 
 # Keep context small – these are not needed for pi_agent image
 workflows/README.md
+# docs must be included for dashboard image (context . with docs/)
+!docs
+!docs/**/*
+!dashboard/public/docs
+!dashboard/public/docs/**/*

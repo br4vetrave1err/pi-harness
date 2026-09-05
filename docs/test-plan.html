@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Test Plan · Pi-Harness</title>
+<link rel="stylesheet" href="./assets/css/style.css"/>
+</head>
+<body>
+<header class="docs-header">
+  <a class="brand" href="./index.html"><div class="brand-mark">π</div><div class="brand-text"><div class="brand-title">Pi-Harness</div><div class="brand-sub">Docs · Test Plan v1.0</div></div></a>
+  <nav class="header-nav"><a href="./index.html">Overview</a><a href="./srs.html">SRS</a><a href="./sad.html">SAD</a><a href="./tdd.html">TDD</a><a href="./test-plan.html" class="active">Test Plan</a><a href="./data-design.html">Data Design</a></nav>
+  <div class="header-actions"><div class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input id="docsSearch" placeholder="Search docs…"/></div><a class="btn" href="./index.html">← Hub</a></div>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-section"><div class="sidebar-title">Test Plan</div><ul class="nav-list">
+      <li><a href="#s1"><span class="nav-icon">1</span> Strategy & scope</a></li>
+      <li><a href="#s2"><span class="nav-icon">2</span> Fixtures & harness</a></li>
+      <li><a href="#s3"><span class="nav-icon">3</span> Unit (67)</a></li>
+      <li><a href="#s4"><span class="nav-icon">4</span> Integration (22)</a></li>
+      <li><a href="#s5"><span class="nav-icon">5</span> E2E (8+4)</a></li>
+      <li><a href="#s6"><span class="nav-icon">6</span> Non-functional</a></li>
+      <li><a href="#s7"><span class="nav-icon">7</span> Traceability</a></li>
+      <li><a href="#s8"><span class="nav-icon">8</span> Gates & CI</a></li>
+    </ul></div>
+  </aside>
+  <main class="content"><div class="content-inner">
+    <div class="breadcrumbs"><a href="./index.html">Docs</a><span class="sep">/</span><span>Test Plan</span></div>
+    <div class="doc-label">Test Plan · 67 unit · 22 integration · 8 E2E (core) + 4 opt</div>
+    <h1 class="doc-title">Test Plan</h1>
+    <p class="doc-subtitle">Normative test plan from <code class="inline">TEST_COVERAGE_PLAN.md</code>. Triangle bounded by fleet bus: every invariant has a falsifiable case. Thresholds <strong>lines 80 / branches 75</strong> on <code class="inline">readFleetStatus()</code>.</p>
+    <div class="version-bar"><span class="pill"><strong>Test Plan 1.0</strong> 2026-09-04</span><span class="pill">Tooling: <strong>Vitest + RTL + supertest/msw + shellcheck + bats + Playwright 1.62</strong></span><span class="pill">Gates: <strong>P0 scenario 100%</strong></span></div>
+
+    <div class="toc"><div class="toc-title">Contents</div><ol>
+      <li><a href="#s1">1 Strategy, scope, triangle, CI gates</a></li>
+      <li><a href="#s2">2 Fixtures & harness helpers</a></li>
+      <li><a href="#s3">3 Unit — 67 cases (reconciler, sessions, components, CLI, agents, workflow)</a></li>
+      <li><a href="#s4">4 Integration — 22 cases (contracts /api/*)</a></li>
+      <li><a href="#s5">5 E2E — 8 core + 4 optionals (Playwright fleet slice)</a></li>
+      <li><a href="#s6">6 Non-functional (security, perf, resilience, a11y)</a></li>
+      <li><a href="#s7">7 Traceability matrix (spec ↔ task ↔ test)</a></li>
+      <li><a href="#s8">8 Coverage targets & gates</a></li>
+    </ol></div>
+
+    <h2 id="s1">1 — Strategy & scope</h2>
+    <div class="diagram"><pre>            E2E (Playwright + docker exec)
+            /  verifies bus is same via two surfaces \
+           /   8 scenarios, &lt;5 min, CI gate          \
+          /____________________________________________\
+         Integration (HTTP ↔ FS ↔ CLI)  22 scenarios
+        /______________________________________________\
+       Unit (Vitest + bats + grep lints)  67 cases</pre></div>
+    <ul>
+      <li>Coverage is <strong>scenario coverage of invariants</strong> (stale→failed, window/spent, traversal, TTL double-filter, shell vs PI, ENOENT guard).</li>
+      <li>Install: <code class="inline">npm --prefix dashboard install -D vitest@^3 jsdom@^26 @testing-library/react@^16 @testing-library/jest-dom@^6 msw@^2 supertest@^7</code>; <code class="inline">npx playwright install --with-deps chromium</code>.</li>
+      <li>Scripts to add: <code class="inline">test / test:watch / test:cov (--thresholds 80/75) / test:api / lint:agents / lint:infra</code> (see <code class="inline">TEST_COVERAGE_PLAN.md:1</code>).</li>
+    </ul>
+
+    <h2 id="s2">2 — Fixtures & helpers</h2>
+    <div class="table-wrap"><table><thead><tr><th>Fixture</th><th>Content</th><th>Used</th></tr></thead><tbody>
+      <tr><td class="mono">fleet/status-running.json</td><td><code class="inline">state:running totalTokens:{total:1200,window:800} durationMs:12000</code></td><td>C4/C5 unit</td></tr>
+      <tr><td class="mono">fleet/status-object-tokens.json</td><td><code class="inline">{window:3100,total:4200}</code></td><td>window/spent</td></tr>
+      <tr><td class="mono">fleet/status-stale.json</td><td><code class="inline">lastUpdate: now-35s state:running</code></td><td>stale→failed</td></tr>
+      <tr><td class="mono">fleet/status-paused.json</td><td><code class="inline">state:paused → waiting</code></td><td>U-C4-04</td></tr>
+      <tr><td class="mono">fleet/status-children.json</td><td><code class="inline">children + workflowGraph flow</code></td><td>nested</td></tr>
+      <tr><td class="mono">fleet/events.jsonl</td><td>6 lines run/steps/steer</td><td>events tab</td></tr>
+      <tr><td class="mono">fleet/output-0.log</td><td>120 lines</td><td>tail bounded</td></tr>
+      <tr><td class="mono">sessions/valid.jsonl</td><td>34 msgs with text content</td><td>parse</td></tr>
+      <tr><td class="mono">sessions/large.jsonl</td><td>5.5 MB (&gt;5MB guard)</td><td>bounded</td></tr>
+    </tbody></table></div>
+    <p>Helpers <code class="inline">tests/helpers/fleet.mjs: mkTmpFleet(dirs), seedFleet(fixtures)</code> + <code class="inline">http.mjs: startServer(port=0)</code> for integration.</p>
+
+    <h2 id="s3">3 — Unit (67 cases)</h2>
+    <h3>3.1 Reconciler <code class="inline">readFleetStatus()</code> — 24 cases (<code class="inline">server.js:25</code>)</h3>
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Scenario</th><th>Expected</th></tr></thead><tbody>
+      <tr><td class="mono">U-C4-01</td><td>Empty dir → no throw</td><td><code class="inline">[]</code></td></tr>
+      <tr><td class="mono">U-C4-02</td><td>Skip dir without <code class="inline">status.json</code></td><td>skip</td></tr>
+      <tr><td class="mono">U-C4-04</td><td><code class="inline">paused→waiting</code></td><td><code class="inline">status waiting</code></td></tr>
+      <tr><td class="mono">U-C4-07</td><td>Stale 35 s → <code class="inline">failed</code>, duration frozen <code class="inline">lastUpdate-startedAt</code></td><td>616 s bug fixed</td></tr>
+      <tr><td class="mono">U-C4-09</td><td>Fresh <code class="inline">durationMs=null → now-startedAt</code></td><td>computed</td></tr>
+      <tr><td class="mono">U-C4-11</td><td><code class="inline">object total → tokens 4200</code></td><td>object branch</td></tr>
+      <tr><td class="mono">U-C4-16</td><td>Tail 8 lines produced</td><td>last 8</td></tr>
+      <tr><td class="mono">U-C4-19</td><td>Kind classification <code class="inline">ERR/tool/cmd</code></td><td>regex</td></tr>
+      <tr><td class="mono">U-C4-20</td><td>Sort <code class="inline">startedAt desc</code></td><td>newest first</td></tr>
+    </tbody></table></div>
+    <p style="font-size:12.5px; color:var(--text-muted)">Full list U-C4-01…24 in <code class="inline">TEST_COVERAGE_PLAN.md:3.1</code>. Must assert <code class="inline">expect(readFleetStatus().find(f=>f.runId==="stale-run").fleetState).toBe("failed")</code>.</p>
+
+    <h3>3.2 Session parser — 6 · Components — 14 · CLI — 6 · Agents — 6 · Workflow — 5</h3>
+    <div class="grid-2">
+      <div class="card"><div class="card-title">Session (U-C5)</div><div style="font-size:12.5px; color:var(--text-dim)">Title/preview/agent/time from <code class="inline">valid.jsonl</code> ( coder/tester tag), time from filename, malformed skip, empty → null.</div></div>
+      <div class="card"><div class="card-title">Frontend (U-C6)</div><div style="font-size:12.5px; color:var(--text-dim)">StatusDot/LogLineView/AgentWindowCard/ Sidebar skeleton/ Topbar counts/ InputBar mode/ null-is-loading guard/ modal derivation/ keyboard guard/ tabs.</div></div>
+    </div>
+    <div class="grid-2">
+      <div class="card"><div class="card-title">CLI (U-C7) — shell helpers</div><div style="font-size:12.5px; color:var(--text-dim)"><code class="inline">get_agent_tag, format_session_line, get_running_agents, get_fleet_stats</code> — G1 object-token regression must be in bats.</div></div>
+      <div class="card"><div class="card-title">Workflow (U-C3) — branching</div><div style="font-size:12.5px; color:var(--text-dim)">PASS(1) · FAIL→2 · FAIL×2→3 · <code class="inline">PASS with notes</code> stops · throw propagates.</div></div>
+    </div>
+
+    <h2 id="s4">4 — Integration (22 cases, supertest + real tmp FS)</h2>
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Endpoint</th><th>Assert</th></tr></thead><tbody>
+      <tr><td class="mono">I-C5-01</td><td><code class="inline">GET /api/fleet</code> 2 running+1 stale → <code class="inline">fleet 2, total 3</code></td><td>filtered flag true</td></tr>
+      <tr><td class="mono">I-C5-03</td><td><code class="inline">GET /api/agents</code> matches fleet <code class="inline">running|waiting</code> counts</td><td>identical TTL</td></tr>
+      <tr><td class="mono">I-C5-09</td><td><code class="inline">GET /api/sessions</code> sorts 20, enriches <code class="inline">fleetRunId</code></td><td>correlation Map</td></tr>
+      <tr><td class="mono">I-C5-11</td><td><code class="inline">GET /api/session/bogus</code> → 404</td><td>body has <code class="inline">id</code></td></tr>
+      <tr><td class="mono">I-C5-13</td><td><code class="inline">GET /api/session large 5.5MB</code> → ~500KB slice</td><td>header bound</td></tr>
+      <tr><td class="mono">I-C5-15</td><td><code class="inline">POST /dispatch shell</code> → <code class="inline">runId 36+4 + status:running</code> visible in next poll</td><td>P0</td></tr>
+      <tr><td class="mono">I-C5-20</td><td><code class="inline">POST /fleet/:id/steer</code> writes <code class="inline">supervisor-channels/*.steer.json</code></td><td>file exists</td></tr>
+      <tr><td class="mono">I-C5-22</td><td><code class="inline">POST /fleet/:id/stop</code> writes <code class="inline">stop.requested</code></td><td>200</td></tr>
+      <tr><td class="mono">I-C5-25</td><td><code class="inline">GET /fleet/:id?lines=200</code> capped 200 / 64KB + truncated flag</td><td>bounded</td></tr>
+      <tr><td class="mono">I-C7-02</td><td><code class="inline">shellcheck dashboard.sh</code> clean</td><td>infra</td></tr>
+    </tbody></table></div>
+    <p style="font-size:12.5px; color:var(--text-muted)">Remaining I-C5-02,05–08,10,12,14,16–19,21,23–24, I-C7-01,03–04 in <code class="inline">TEST_COVERAGE_PLAN.md:4</code> — include traversal (<code class="inline">I-C5-12 ../</code> fail closed) and dispatch truncation 2000 ch.</p>
+
+    <h2 id="s5">5 — E2E (Playwright, 8 core +4 opt)</h2>
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Scenario</th><th>Steps → expect</th></tr></thead><tbody>
+      <tr><td class="mono">E2E-01</td><td>Tracer dispatch→card→modal</td><td>goto → InputBar shell <code class="inline">sleep 2 && echo hello</code> → wait 3s → 1 card → click → <code class="inline">Live Log</code> shows <code class="inline">hello</code></td></tr>
+      <tr><td class="mono">E2E-02</td><td>LEFT correlation + static transcript</td><td>GET sessions seed vs LEFT click w/o fleet → <code class="inline">log</code> not <code class="inline">waiting for logs…</code></td></tr>
+      <tr><td class="mono">E2E-03</td><td>5 tabs without crash</td><td><code class="inline">f</code> open → cycle <code class="inline">log→session</code> → no PAGE ERROR</td></tr>
+      <tr><td class="mono">E2E-04</td><td>Steer writes file + timeline</td><td>running 20 s → <code class="inline">focus scope</code> follow_up → Send → <code class="inline">events.jsonl steer.delivered</code></td></tr>
+      <tr><td class="mono">E2E-05</td><td>Stop transitions</td><td><code class="inline">D</code> stop → <code class="inline">stop.requested</code> → <code class="inline">stopped|failed</code></td></tr>
+      <tr><td class="mono">E2E-06</td><td>SHELL vs PI both visible</td><td>SHELL <code class="inline">echo pi-mode-test</code> + PI dispatch → 2 windows colors <code class="inline">#39ff6e vs #4da6ff</code></td></tr>
+      <tr><td class="mono">E2E-07</td><td>Poll 1s keeps live without SSE drift</td><td>elapsed ↑ ~3s in 3s</td></tr>
+      <tr><td class="mono">E2E-08</td><td>Large session truncation</td><td>5.5 MB seed → click → ~500KB not 5 MB freeze</td></tr>
+    </tbody></table></div>
+    <div class="callout blue"><div class="callout-title">Optionals</div><div style="font-size:12.5px; color:var(--text-dim)">E2E-09 SSE &lt;200 ms · E2E-10 <code class="inline">?all=true</code> shows stale DONE hidden in default · E2E-11 snapshot regression · E2E-12 keyboard nav <code class="inline">f/j/k/x/?/Esc</code> — see <code class="inline">TEST_COVERAGE_PLAN.md:5</code>.</div></div>
+
+    <h2 id="s6">6 — Non-functional</h2>
+    <div class="table-wrap"><table><thead><tr><th>Area</th><th>ID</th><th>Check</th></tr></thead><tbody>
+      <tr><td>Security</td><td class="mono">NF-01</td><td><code class="inline">task 2000, message</code> caps, XSS <code class="inline">break-all</code>, traversal guard, CORS narrow</td></tr>
+      <tr><td>Perf</td><td class="mono">NF-02</td><td><code class="inline">readFleetStatus 100 dirs &lt;80ms p95</code>, bundle <code class="inline">dist/index-*.js &lt;200KB gz</code></td></tr>
+      <tr><td>Resilience</td><td class="mono">NF-03</td><td>ENOENT guard, catch malformed, stale 30s GC 10m prevents 616 s</td></tr>
+      <tr><td>Observability</td><td class="mono">NF-04</td><td><code class="inline">[dashboard-api]</code> logs + health <code class="inline">GET /api/fleet</code> timestamp</td></tr>
+      <tr><td>A11y</td><td class="mono">NF-05</td><td><code class="inline">role=dialog, Esc close</code> (focus trap P2 gap)</td></tr>
+    </tbody></table></div>
+
+    <h2 id="s7">7 — Traceability matrix</h2>
+    <div class="table-wrap"><table><thead><tr><th>Spec</th><th>Task</th><th>Tests</th></tr></thead><tbody>
+      <tr><td>Fleet state map</td><td class="mono">C4-P1-02</td><td><code class="inline">U-C4-04..06,07</code></td></tr>
+      <tr><td>Window/spent</td><td class="mono">C4-P4-01</td><td><code class="inline">U-C4-11, I-C5-08</code></td></tr>
+      <tr><td>Bounded 64KB/200</td><td class="mono">C4-P1-03</td><td><code class="inline">U-C4-24, I-C5-25, E2E-08</code></td></tr>
+      <tr><td>Dispatch shell|pi</td><td class="mono">C5-P1-05</td><td><code class="inline">I-C5-15..18, E2E-01,06</code></td></tr>
+      <tr><td>Steer/stop</td><td class="mono">C5-P1-06</td><td><code class="inline">I-C5-20,22, E2E-04,05</code></td></tr>
+      <tr><td>Coder/tester contracts</td><td class="mono">C2-P0-07</td><td><code class="inline">U-C2</code></td></tr>
+      <tr><td>Workflow 3 rounds</td><td class="mono">C3-P3-01</td><td><code class="inline">U-C3</code></td></tr>
+    </tbody></table></div>
+
+    <h2 id="s8">8 — Coverage targets & gates</h2>
+    <div class="table-wrap"><table><thead><tr><th>Suite</th><th>Threshold</th><th>Gate</th></tr></thead><tbody>
+      <tr><td><code class="inline">dashboard/server.js readFleetStatus</code></td><td>lines 80 / branches 75</td><td>block merge if red</td></tr>
+      <tr><td><code class="inline">dashboard/src/App.tsx</code></td><td>lines 75</td><td>RTL suite</td></tr>
+      <tr><td>Integration contracts</td><td>scenarios 100% invariants</td><td>P0 ids must green</td></tr>
+      <tr><td>CLI bats</td><td>clean + 6 snapshots</td><td><code class="inline">shellcheck + bash -n</code></td></tr>
+      <tr><td>E2E 8 core</td><td>8/8 chromium headless</td><td><code class="inline">BASE_URL :5173 and :3000</code></td></tr>
+    </tbody></table></div>
+    <pre>npm --prefix dashboard run test:cov -- --reporter=verbose --coverage.reporter=text
+bats tests/cli --formatter tap | tee coverage-cli.tap
+node test_ui_playwright.js 2>&1 | tee coverage-e2e.log
+npx playwright test tests/e2e --project=chromium --reporter=list</pre>
+    <div class="callout"><div class="callout-title">Gap watch (fail until fixed)</div><div style="font-size:12.5px; color:var(--text-dim)">G1 object tokens CLI · G2 stats <code class="inline">all</code> vs filtered · G6 traversal guard · see <code class="inline">TEST_COVERAGE_PLAN.md:9</code> — those tests document P1 fixes.</div></div>
+
+    <div class="footer-nav"><a href="./tdd.html"><span class="label">← Previous</span><span class="title">TDD — Technical Design</span></a><a href="./data-design.html"><span class="label">Next →</span><span class="title">Data Design — bus schemas</span></a></div>
+    <div style="margin-top:18px; font-size:11px; color:var(--text-muted); border-top:1px solid var(--border); padding-top:12px">Test Plan mirrors <code class="inline">TEST_COVERAGE_PLAN.md</code> (465 lines) and is enforced by <code class="inline">.github/workflows/docker-ci.yml</code>. Served at <code class="inline">/docs/test-plan.html</code></div>
+  </div></main>
+</div>
+<script src="./assets/js/docs.js"></script>
+</body>
+</html>

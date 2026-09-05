@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>SAD — Software Architecture Document · Pi-Harness</title>
+<link rel="stylesheet" href="./assets/css/style.css"/>
+</head>
+<body>
+<header class="docs-header">
+  <a class="brand" href="./index.html"><div class="brand-mark">π</div><div class="brand-text"><div class="brand-title">Pi-Harness</div><div class="brand-sub">Docs · SAD v1.0</div></div></a>
+  <nav class="header-nav"><a href="./index.html">Overview</a><a href="./srs.html">SRS</a><a href="./sad.html" class="active">SAD</a><a href="./tdd.html">TDD</a><a href="./test-plan.html">Test Plan</a><a href="./data-design.html">Data Design</a></nav>
+  <div class="header-actions"><div class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input id="docsSearch" placeholder="Search docs…"/></div><a class="btn" href="./index.html">← Hub</a></div>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-section"><div class="sidebar-title">SAD</div><ul class="nav-list">
+      <li><a href="#s1"><span class="nav-icon">1</span> Introduction</a></li>
+      <li><a href="#s2"><span class="nav-icon">2</span> Goals & constraints</a></li>
+      <li><a href="#s3"><span class="nav-icon">3</span> C4 / Component map</a></li>
+      <li><a href="#s4"><span class="nav-icon">4</span> 4+1 Views</a></li>
+      <li><a href="#s5"><span class="nav-icon">5</span> Decisions (ADR)</a></li>
+      <li><a href="#s6"><span class="nav-icon">6</span> Qualities & risks</a></li>
+      <li><a href="#app"><span class="nav-icon">A</span> Traceability</a></li>
+    </ul></div>
+  </aside>
+  <main class="content"><div class="content-inner">
+    <div class="breadcrumbs"><a href="./index.html">Docs</a><span class="sep">/</span><span>SAD</span></div>
+    <div class="doc-label">SAD · Software Architecture Document · 4+1 + C4</div>
+    <h1 class="doc-title">Software Architecture Document</h1>
+    <p class="doc-subtitle">Architecture of Pi-Harness derived first-principles from 9 atoms (<code class="inline">TASKS.md:2–4</code>) → 10 components <code class="inline">C0–C9</code> → DAG <code class="inline">L0→L5</code>. Every view below is backed by a line-ref file.</p>
+    <div class="version-bar"><span class="pill"><strong>SAD 1.0</strong> 2026-09-04</span><span class="pill">Style: <strong>4+1 Kruchten + C4</strong></span><span class="pill">Components: <strong>C0–C9</strong></span></div>
+
+    <div class="toc"><div class="toc-title">Contents</div><ol>
+      <li><a href="#s1">1 Introduction</a></li>
+      <li><a href="#s2">2 Architectural Goals, Constraints, Assumptions</a></li>
+      <li><a href="#s3">3 Decomposition — C0–C9 & DAG</a></li>
+      <li><a href="#s4">4 Views — Logical, Process, Deployment, Implementation, Data</a></li>
+      <li><a href="#s5">5 Key Decisions (ADR)</a></li>
+      <li><a href="#s6">6 Qualities, Risks, Evolution</a></li>
+    </ol></div>
+
+    <h2 id="s1">1 — Introduction</h2>
+    <p>This SAD documents the <em>decisions that are hard to reverse</em>: substrate pinning, filesystem-as-bus, stateless projection, and dual-surface parity. Method is first-principles: start from irreducible truths, derive components as minimal mechanisms, then order by build DAG.</p>
+    <div class="callout blue"><div class="callout-title">How to read</div><div style="font-size:12.5px; color:var(--text-dim)">Each component lists owned state, I/O, invariant, and “if it lies” failure — those become SRS musts and test gates (<code class="inline">TASKS.md:3</code>).</div></div>
+
+    <h2 id="s2">2 — Goals, Constraints, Assumptions</h2>
+    <div class="grid-2">
+      <div class="card"><div class="card-title">Goals (in priority)</div>
+        <ol style="margin:6px 0 0; padding-left:18px; font-size:12.5px">
+          <li><strong>Observability</strong> — any detached <code class="inline">pi</code> run stays observable after parent exits (T1).</li>
+          <li><strong>Parity</strong> — HTTP and TTY show the same fleet within one tick (T7).</li>
+          <li><strong>Determinism</strong> — rebuild is cached hit; host edits to <code class="inline">.pi/agents</code> live without rebuild (T8).</li>
+          <li><strong>Safety</strong> — bounded inspect, no traversal, no ENOENT crash (T6).</li>
+        </ol>
+      </div>
+      <div class="card"><div class="card-title">Constraints</div>
+        <ul style="margin:6px 0 0; padding-left:16px; font-size:12.5px">
+          <li>Pinned <code class="inline">ubuntu:24.04, node 22, pi 0.84.4</code> (<code class="inline">Dockerfile:1</code>)</li>
+          <li>Model <code class="inline">dots</code> 512k → clamp 390k (<code class="inline">Dockerfile:37</code>)</li>
+          <li>Single-host volumes, no external queue</li>
+          <li><code class="inline">sh</code> fallback (Alpine) for dispatch (<code class="inline">server.js:398</code>)</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2 id="s3">3 — Decomposition — C0–C9 & Build DAG</h2>
+    <div class="table-wrap"><table><thead><tr><th>C</th><th>Name</th><th>Truths</th><th>Key files</th><th>Invariant (one liner)</th></tr></thead><tbody>
+      <tr><td class="mono">C0</td><td>Host & Container Substrate</td><td>T1,T8,T9</td><td><code class="inline">Dockerfile:1</code> · <code class="inline">docker-entrypoint.sh:1</code> · <code class="inline">docker-compose.yml:35</code></td><td>Tail <code class="inline">pi-freeflow.log</code> to stdout; trap SIGTERM; volumes shared</td></tr>
+      <tr><td class="mono">C1</td><td>Pi Runtime & Extensions</td><td>T2,T3</td><td><code class="inline">Dockerfile:20,27,28</code> · <code class="inline">.pi/config.json:1</code></td><td>Clamp 390k; <code class="inline">pi list</code> shows 4 extensions</td></tr>
+      <tr><td class="mono">C2</td><td>Agent Definitions</td><td>T2</td><td><code class="inline">.pi/agents/coder.md:4</code> · <code class="inline">tester.md:34</code></td><td><code class="inline">coder</code> delegates, <code class="inline">tester</code> leaf &amp; <code class="inline">Test verdict</code></td></tr>
+      <tr><td class="mono">C3</td><td>Workflow Orchestration</td><td>T5</td><td><code class="inline">workflows/coder-tester-loop.js:9</code></td><td>3-round cap, FAIL-only branch</td></tr>
+      <tr><td class="mono">C4</td><td>Fleet Observability Contract</td><td>T1,T4</td><td><code class="inline">server.js:25</code> (schema)</td><td>Durable artifacts + stale→failed</td></tr>
+      <tr><td class="mono">C5</td><td>Dashboard Backend</td><td>T4,T6,T7</td><td><code class="inline">server.js:175,203,326</code></td><td>TTL + bounded + never writes <code class="inline">status.json</code> except mock</td></tr>
+      <tr><td class="mono">C6</td><td>Dashboard Frontend</td><td>T7</td><td><code class="inline">App.tsx:193,303,397,731</code></td><td>Null-is-loading, double-filter activeOnly</td></tr>
+      <tr><td class="mono">C7</td><td>CLI Dashboard</td><td>T4,T7</td><td><code class="inline">dashboard.sh:57,81</code></td><td>Mirrors reconciler; <code class="inline">tput cols</code></td></tr>
+      <tr><td class="mono">C8</td><td>Support Scripts & Auto-update</td><td>T8,T9</td><td><code class="inline">task_watcher.sh</code> · <code class="inline">git-sync.sh</code></td><td>Tail loops, git rev-parse, Slack retry</td></tr>
+      <tr><td class="mono">C9</td><td>CI/CD</td><td>T8</td><td><code class="inline">.github/workflows/docker-ci.yml:12</code></td><td>Buildx + GHCR + watchtower label</td></tr>
+    </tbody></table></div>
+    <div class="diagram"><pre>L0 C0 substrate ──┬── C2 agents ──┬── C1 runtime/proxy ──┐
+                 │               │                     │
+                 │ C3 workflow   │ C4 bus (status…) ───┤
+                 └───────────────┼── status.json ──────┤
+                                 └── C5 backend ───────┤
+                                       │              │
+                                  C6 frontend    C7 CLI
+                                      └────┬─────┘
+                                           │
+                                      C8 scripts + C9 CI
+
+Tracer bullet: L0 Dockerfile → C1 pi list → C2 coder.md bake → C4 spawn → C5 GET /api/fleet → C6 card &lt;3s</pre></div>
+    <p><strong>Build order</strong> (tropic): <code class="inline">L0 C0 → L1 C1+C2 → L2 C4 → L3 C3+C5 → L4 C6|C7 → L5 C8+C9</code> (<code class="inline">TASKS.md:4</code>).</p>
+
+    <h2 id="s4">4 — Views (Kruchten 4+1)</h2>
+    <h3>4.1 Logical view — domain & modules</h3>
+    <p>Layers: <strong>Substrate → Runtime → Bus → Projection → Orchestration</strong>. Bus is the hinge (file system). Projection never mutates bus except mock shell path with unique <code class="inline">runId</code>.</p>
+    <div class="grid-2">
+      <div class="card"><div class="card-title">Bounded contexts</div><ul style="font-size:12.5px"><li><code class="inline">Fleet</code> (lifecycle, tokens, cost, children)</li><li><code class="inline">Sessions</code> (chat jsonl, agent tag)</li><li><code class="inline">Workflow</code> (rounds, verdict)</li><li><code class="inline">Presentation</code> (cards, modals, stats)</li></ul></div>
+      <div class="card"><div class="card-title">Invariants as types</div><pre>type FleetState = "running"|"pending"|"paused"|"complete"|"failed"|"stopped"
+type DashboardStatus = "running"|"waiting"|"done"|"error"
+map: pending→running, paused→waiting, complete→done, failed|stopped→error
+stale(lastUpdate, state) = (running|pending && now-lastUpdate>30s) => failed</pre></div>
+    </div>
+
+    <h3>4.2 Process view — runtime, concurrency, lifetimes</h3>
+    <div class="diagram"><pre>dispatch(POST /api/dispatch)
+  ├─ PI mode: spawn('docker',['exec','-d','pi-personal-agent','pi','-p',prompt]) detatched → returns 100ms (server.js:340)
+  └─ SHELL mode: mkdir &lt;runId&gt; → write status.json:running → spawn('sh -c … | >> output-0.log') → setTimeout 8s → status:complete (server.js:358)
+
+poll: App.tsx useEffect 1s → GET /sessions + /fleet + /session-stats  (Promise.all)
+SSE:  EventSource /api/fleet/stream → fs.watch(SUBAGENT_RUNS) → fleet:changed (500ms)
+
+modal:
+  fetch /api/fleet/:id?lines=200 (bounded) → tabs log|transcript|events|artifacts|session
+  steer: POST /fleet/:id/steer → supervisor-channels/&lt;runId&gt;.steer.json
+  stop:  POST /fleet/:id/stop  → stop.requested
+GC: setInterval 60s → delete failed|complete older than 10min (server.js:642)</pre></div>
+
+    <h3>4.3 Deployment view — containers & volumes</h3>
+    <div class="diagram"><pre>Host (Windows E:\projects\pi-harness) ──volumes──► pi-personal-agent (ubuntu:24.04)
+  ├─ /workspace  ←─ E:/…:/workspace                           │  pi 0.84.4 + feynman + pi-freeflow
+  ├─ /root/.pi   ←─ E:/…/.pi:/root/.pi (+ sessions)           │  entrypoint: tail + heartbeat + git-sync?
+  └─ /tmp/pi-…   ←─ pi-subagents volume ─┬───────────────────►├─ /tmp/pi-subagents-uid-0/async-subagent-runs/
+                                         │                    └────────────────────┬─────────────────
+                                         │                                         │ shared
+                              pi-dashboard (node:22-alpine)                         │
+                               ├─ Express 3001 ─ GET /api/* ───────────────────────┘
+                               ├─ dist/ (Vite build) served at :3000
+                               ├─ /workspace/docs → /docs static
+                               └─ /var/run/docker.sock (for docker exec PI)
+
+git-sync (alpine/git --profile git-sync) ── fetch 15s ── pull --ff-only ── infra? rebuild
+watchtower (containrrr/watchtower --profile watchtower) ── polls GHCR ── rolling restart</pre></div>
+    <ul>
+      <li>Healthchecks: <code class="inline">pi --version</code> (agent) · <code class="inline">wget --spider /api/fleet</code> (dashboard).</li>
+      <li>Ports: prod <code class="inline">3000:3001</code> (+ Vite dev <code class="inline">5173→3001</code>).</li>
+    </ul>
+
+    <h3>4.4 Implementation view — file ownership</h3>
+    <div class="table-wrap"><table><thead><tr><th>Layer</th><th>Files</th><th>Build effect</th></tr></thead><tbody>
+      <tr><td>Substrate</td><td class="mono">Dockerfile:1–141, docker-entrypoint.sh:26, docker-compose.yml:35</td><td>Cache layers apt→node→pi→extensions→agents→tools</td></tr>
+      <tr><td>Backend</td><td class="mono">dashboard/server.js:25,129,175,203,326,457,517,642 + Dockerfile 18</td><td>Single Node process, 12 REST endpoints, SSE, GC</td></tr>
+      <tr><td>Frontend</td><td class="mono">dashboard/src/App.tsx:97,124,180,303,353,731 + vite.config.ts:15</td><td>React memo, deep-equality guard, 1s poll + SSE</td></tr>
+      <tr><td>CLI</td><td class="mono">dashboard.sh:12,20,57,81,112</td><td>ANSI, tput cols, grep object tokens (G1)</td></tr>
+      <tr><td>Docs</td><td class="mono">docs/*.html + docs/assets/css/style.css + dashboard/server.js /docs static</td><td>Express static at <code class="inline">/docs</code> (this sprint)</td></tr>
+    </tbody></table></div>
+
+    <h3>4.5 Data view</h3>
+    <p>See <a href="./data-design.html">Data Design</a> for schema: <code class="inline">status.json (canonical 22 fields) → events.jsonl → output-0.log → process-terminal.json → subagent-artifacts</code> plus <code class="inline">sessions/*.jsonl</code>. Bus is append-mostly; projection is read-heavy with bounded tail.</p>
+
+    <h2 id="s5">5 — Key Decisions (ADR)</h2>
+    <div class="table-wrap"><table><thead><tr><th>ADR</th><th>Decision</th><th>Alternatives rejected</th><th>Consequence</th></tr></thead><tbody>
+      <tr><td class="mono">ADR-1</td><td>Filesystem is the bus (no DB/queue). Files are watched by polling/SSE.</td><td>Redis, SQLite around bus</td><td>Zero ops, durable, debuggable <code class="inline">ls + cat</code>; must GC and bound reads</td></tr>
+      <tr><td class="mono">ADR-2</td><td>Stateless projection: dashboard never writes <code class="inline">status.json</code> except shell mock with unique <code class="inline">runId</code>.</td><td>Write-through cache</td><td>Prevents mock overwriting real runs; shell mock isolated</td></tr>
+      <tr><td class="mono">ADR-3</td><td>Proxy dots clamp 390k (<code class="inline">Dockerfile:37</code> + <code class="inline">entrypoint runtime patch</code>) and model def 390k.</td><td>Fix upstream pi-freeflow only</td><td>Idempotent patch survives image + host volume</td></tr>
+      <tr><td class="mono">ADR-4</td><td>Two renderers share reconciler rules: TTL, stale, window/spent, bounded. CLI mirrors <code class="inline">readFleetStatus()</code>.</td><td>Separate parsing per surface</td><td>Parity drift is a P1 bug (G1)</td></tr>
+      <tr><td class="mono">ADR-5</td><td>Workflow is JS <code class="inline">runs.run()</code> chain (max 3 rounds) not external orchestrator.</td><td>Airflow, Temporal</td><td>Deterministic, no scheduler; tester must re-read <code class="inline">git diff</code></td></tr>
+      <tr><td class="mono">ADR-6</td><td>Docs served as static HTML at <code class="inline">/docs</code> (community standard) via Express static, also built to <code class="inline">dist/docs</code>.</td><td>Docs outside container or SPA route</td><td>Deep-linkable, SEO-friendly, no auth</td></tr>
+      <tr><td class="mono">ADR-7</td><td>Frontend null-is-loading + deep-equality guard on <code class="inline">conversations</code> prevents FALLBACK flash (<code class="inline">App.tsx:445,534</code>).</td><td>Always show fallback</td><td>Skeleton → real without modal re-fetch loop</td></tr>
+    </tbody></table></div>
+
+    <h2 id="s6">6 — Qualities, Risks, Evolution</h2>
+    <h3>Qualities addressed</h3>
+    <ul>
+      <li><strong>Availability</strong>: entrypoint <code class="inline">tail -F</code> survives rotation; heartbeat proves liveness; healthchecks gate deploy.</li>
+      <li><strong>Performance</strong>: <code class="inline">readdirSync + readFileSync</code> bounded to 20 sessions + GC fleet; memo <code class="inline">LogLineView</code> prevents 500 ms full re-render.</li>
+      <li><strong>Safety</strong>: 5 MB→500 KB session guard; 64 KB/200 fleet bound; traversal <code class="inline">basename + normalize + inside SESSIONS_DIR</code>.</li>
+    </ul>
+    <h3>Risks & mitigations</h3>
+    <div class="table-wrap"><table><thead><tr><th>Risk</th><th>Prob</th><th>Mitigation</th><th>Test gate</th></tr></thead><tbody>
+      <tr><td>Token object parsing drift (G1)</td><td>High</td><td>Unify <code class="inline">readFleetStatus</code> vs <code class="inline">dashboard.sh grep</code> via extracted helper</td><td><code class="inline">U-C7-05, I-C7-04</code></td></tr>
+      <tr><td>Stats aggregate invisible done (G2)</td><td>Med</td><td>Stats must use filtered fleet not <code class="inline">all</code></td><td><code class="inline">I-C5-14</code></td></tr>
+      <tr><td>Traversal via encoded <code class="inline">../</code></td><td>Med</td><td><code class="inline">decodeURIComponent → basename → normalize → prefix check</code></td><td><code class="inline">I-C5-12</code></td></tr>
+      <tr><td>Fleet unbounded disk</td><td>Low</td><td>GC 10 min + TTL hides stale; <code class="inline">server.js:642</code></td><td><code class="inline">C0-P4-02</code></td></tr>
+    </tbody></table></div>
+    <h3>Evolution (next)</h3>
+    <ul>
+      <li>SSE upgrade to replace poll for sub-100 ms (<code class="inline">TASKS.md:C5-P3-03 P2</code>).</li>
+      <li>Extract <code class="inline">fleetParser.mjs</code> shared between Node and bash (fix G1).</li>
+      <li>Docs version dropdown when releases tag <code class="inline">/docs/vX.Y.Z</code>.</li>
+    </ul>
+
+    <div class="callout"><div class="callout-title">Traceability note</div><div style="font-size:12.5px; color:var(--text-dim)">This SAD follows <code class="inline">TASKS.md:6</code> traceability: <code class="inline">PLAN-fleet-sync §3 → C5/C7 → server.js:203 / dashboard.sh:57 → I-C5-01/I-C7-01</code>, etc. Full matrix in <code class="inline">TASKS.md:8</code> + <code class="inline">TEST_COVERAGE_PLAN.md:8</code>.</div></div>
+
+    <div class="footer-nav"><a href="./srs.html"><span class="label">← Previous</span><span class="title">SRS — Requirements</span></a><a href="./tdd.html"><span class="label">Next →</span><span class="title">TDD — Technical Design</span></a></div>
+    <div style="margin-top:18px; font-size:11px; color:var(--text-muted); border-top:1px solid var(--border); padding-top:12px">SAD based on <code class="inline">TASKS.md:3–4</code> + <code class="inline">PLAN-fleet-observability-UI.md</code>. Served at <code class="inline">/docs/sad.html</code></div>
+  </div></main>
+</div>
+<script src="./assets/js/docs.js"></script>
+</body>
+</html>
